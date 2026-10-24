@@ -1,7 +1,7 @@
 CC = gcc
 EXEC = fof
-FOB_SRCS = $(wildcard ../fob/fob/*.c) $(wildcard ../fob/fob/backends/fob_linux_x86_64.c)
-SRCS = $(wildcard src/*.c) $(FOB_SRCS) -I../fob/fob
+FOB_SRCS = $(wildcard src/fob/*.c) $(wildcard src/fob/backends/fob_linux_x86_64.c)
+SRCS = $(wildcard src/*.c) $(FOB_SRCS) -Isrc/fob
 CFLAGS = -Wall -Wextra -Wpedantic -std=c99 -march=native
 DEBUG ?= 0
 
