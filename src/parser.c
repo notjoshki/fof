@@ -24,6 +24,8 @@
 #define PARSING_ARITHMETIC 0x02
 #define PARSING_SINGLE_VALUE 0x04
 #define PARSING_VALUE 0x08
+#define PARSING_LOOP 0x10
+#define PARSING_FOR 0x20
 
 typedef struct {
     char *filename;
@@ -421,6 +423,10 @@ static FOB_AST *parse_identifier(Parser *parser) {
             id = parse_initial_identifier(parser, &modifiers);
         } while (modifiers != modifiers_before);
 
+        // TODO: Improve this shit.
+        if ((modifiers & MOD_SIGNED || modifiers & MOD_UNSIGNED) && (strcmp(id, "float") == 0 || strcmp(id, "double") == 0))
+            log_error(ERROR_CRITICAL, "Invalid combination of signedness modifier and floating-point type '%s'\n", id);
+
         if (!id_is_data_type(parser->token->value)) {
             // Only modifiers specified, no type name, default to int.
             parser->token_index--;
@@ -667,6 +673,67 @@ static FOB_AST *parse_inline_asm(Parser *parser) {
     return fob_new_ast_inline_assembly(code);
 }
 
+static FOB_AST *parse_for(Parser *parser) {
+    const size_t flags = parser->flags;
+    parser->flags |= PARSING_FOR;
+    eat(parser, TOKEN_LPAREN);
+
+    const size_t scope_uid = parser->scope.scope_uid;
+    parser->scope.scope_uid = parser->scope_uids++;
+    parser->scope.indent_level++;
+    parser->flags |= PARSING_LOOP;
+
+    FOB_AST *stmt = parser->token->type == TOKEN_SEMICOLON ? NULL : parse(parser);
+    eat(parser, TOKEN_SEMICOLON);
+
+    FOB_AST *condition = parser->token->type == TOKEN_SEMICOLON ? NULL : parse_condition(parser, NULL);
+    eat(parser, TOKEN_SEMICOLON);
+
+    FOB_AST *repeater = parser->token->type == TOKEN_SEMICOLON ? NULL : parse(parser);
+    eat(parser, TOKEN_RPAREN);
+
+    parser->flags &= ~PARSING_FOR;
+    FOB_AST_List body = parse_body(parser, false);
+    parser->flags = flags;
+
+    parser->scope.scope_uid = scope_uid;
+    parser->scope.indent_level--;
+    return fob_new_ast_for(stmt, condition, repeater, body);
+}
+
+static FOB_AST *parse_while(Parser *parser, const bool do_first) {
+    eat(parser, TOKEN_KEYWORD);
+
+    const size_t scope_uid = parser->scope.scope_uid;
+    parser->scope.scope_uid = parser->scope_uids++;
+    parser->scope.indent_level++;
+
+    const size_t flags = parser->flags;
+    parser->flags |= PARSING_LOOP;
+
+    FOB_AST *condition;
+    FOB_AST_List body;
+    
+    if (do_first) {
+        body = parse_body(parser, false);
+
+        if (strcmp(parser->token->value, "while") != 0)
+            log_error(ERROR_CRITICAL, "Expected 'while' keyword to match 'do' but found '%s'\n", token_type_to_string(parser->token->type));
+
+        step(parser);
+        condition = parse_condition(parser, NULL);
+        eat(parser, TOKEN_SEMICOLON);
+    } else {
+        condition = parse_condition(parser, NULL);
+        body = parse_body(parser, false);
+    }
+
+    parser->flags = flags;
+    parser->scope.scope_uid = scope_uid;
+    parser->scope.indent_level--;
+    return fob_new_ast_while(condition, body, do_first);
+}
+
 static FOB_AST *parse_keyword(Parser *parser) {
     if (strcmp(parser->token->value, "return") == 0) {
         eat(parser, TOKEN_KEYWORD);
@@ -681,7 +748,27 @@ static FOB_AST *parse_keyword(Parser *parser) {
     } else if (strcmp(parser->token->value, "asm") == 0) {
         eat(parser, TOKEN_KEYWORD);
         return parse_inline_asm(parser);
-    }
+    } else if (strcmp(parser->token->value, "for") == 0) {
+        eat(parser, TOKEN_KEYWORD);
+        return parse_for(parser);
+    } else if (strcmp(parser->token->value, "break") == 0) {
+        eat(parser, TOKEN_KEYWORD);
+
+        if (!(parser->flags & PARSING_LOOP))
+            log_error(ERROR_CRITICAL, "Invalid break statement outside of a loop\n");
+
+        return fob_new_ast_break();
+    } else if (strcmp(parser->token->value, "continue") == 0) {
+        eat(parser, TOKEN_KEYWORD);
+
+        if (!(parser->flags & PARSING_LOOP))
+            log_error(ERROR_CRITICAL, "Invalid continue statement outside of a loop\n");
+
+        return fob_new_ast_continue();
+    } else if (strcmp(parser->token->value, "while") == 0)
+        return parse_while(parser, false);
+    else if (strcmp(parser->token->value, "do") == 0)
+        return parse_while(parser, true);
 
     log_compiler_error("Uncaught keyword '%s'\n", parser->token->value);
     step(parser);
@@ -713,6 +800,13 @@ static FOB_AST *parse_digit(Parser *parser) {
 
     step(parser);
     return fob_new_ast_constant(fob_create_data_type(FOB_PRIM_U64), (FOB_AST_Constant_Value){ .u64 = u64 });
+}
+
+static FOB_AST *parse_string(Parser *parser) {
+    char *text = malloc(strlen(parser->token->value) + 1);
+    strcpy(text, parser->token->value);
+    eat(parser, TOKEN_STRING);
+    return fob_new_ast_string(text);
 }
 
 static FOB_AST *parse_assignment(Parser *parser, FOB_AST *lhs) {
@@ -834,15 +928,52 @@ static FOB_AST *parse_dereference(Parser *parser) {
 }
 
 static void skip_semicolons(Parser *parser) {
+    if (parser->flags & PARSING_FOR)
+        return;
+
     while (parser->token->type == TOKEN_SEMICOLON)
         step(parser);
+}
+
+static FOB_AST *parse_index(Parser *parser, FOB_AST *pointer) {
+    eat(parser, TOKEN_LSQUARE);
+    FOB_AST *offset = parse_value(parser);
+    eat(parser, TOKEN_RSQUARE);
+    return fob_new_ast_index(pointer, offset);
+}
+
+static FOB_AST *parse_pre_operation(Parser *parser) {
+    const Token_Type token = parser->token->type;
+    assert(token == TOKEN_PLUS || token == TOKEN_MINUS);
+    const FOB_AST_Operator_Type type = token == TOKEN_PLUS ? FOB_AST_OPERATOR_ADD : FOB_AST_OPERATOR_SUB;
+    eat(parser, token);
+    eat(parser, token);
+
+    parser->flags |= PARSING_SINGLE_VALUE;
+    FOB_AST *value = parse_value(parser);
+    parser->flags &= ~PARSING_SINGLE_VALUE;
+    return fob_new_ast_pre_operation(type, value);
+}
+
+static FOB_AST *parse_post_operation(Parser *parser, FOB_AST *value) {
+    const Token_Type token = parser->token->type;
+    assert(token == TOKEN_PLUS || token == TOKEN_MINUS);
+    const FOB_AST_Operator_Type type = token == TOKEN_PLUS ? FOB_AST_OPERATOR_ADD : FOB_AST_OPERATOR_SUB;
+    eat(parser, token);
+    eat(parser, token);
+    return fob_new_ast_post_operation(type, value);
 }
 
 static FOB_AST *parse(Parser *parser) {
     if (!(parser->flags & PARSING_VALUE))
         skip_semicolons(parser);
 
-    FOB_AST *stmt;
+    FOB_AST *stmt = NULL;
+
+    if ((parser->token->type == TOKEN_PLUS || parser->token->type == TOKEN_MINUS) && peek(parser, 1)->type == parser->token->type) {
+        stmt = parse_pre_operation(parser);
+        goto done_value; // BOOO!!! So scary!!
+    }
 
     switch (parser->token->type) {
         case TOKEN_EOF:
@@ -858,6 +989,9 @@ static FOB_AST *parse(Parser *parser) {
         case TOKEN_FLOAT:
             stmt = parse_digit(parser);
             break;
+        case TOKEN_STRING:
+            stmt = parse_string(parser);
+            break;
         case TOKEN_LPAREN:
             stmt = parse_parentheses_expression(parser);
             break;
@@ -866,7 +1000,10 @@ static FOB_AST *parse(Parser *parser) {
             stmt = parse_unary_not(parser);
             break;
         case TOKEN_MINUS:
-            stmt = parse_unary_negate(parser);
+            if (peek(parser, 1)->type == TOKEN_MINUS)
+                stmt = parse_pre_operation(parser);
+            else
+                stmt = parse_unary_negate(parser);
             break;
         case TOKEN_AND:
             stmt = parse_pointer(parser);
@@ -874,17 +1011,29 @@ static FOB_AST *parse(Parser *parser) {
         case TOKEN_STAR:
             stmt = parse_dereference(parser);
             break;
-        default:
-            log_error(ERROR_CRITICAL, "Invalid statement '%s'\n", token_type_to_string(parser->token->type));
-            step(parser);
+        case TOKEN_PLUS:
+            if (peek(parser, 1)->type == parser->token->type)
+                stmt = parse_pre_operation(parser);
+            break;
+        default: break;
+    }
 
-            while (parser->token->type == TOKEN_SEMICOLON)
-                step(parser);
+done_value:
 
-            return parse(parser);
+    if (stmt == NULL) {
+        log_error(ERROR_CRITICAL, "Invalid statement '%s'\n", token_type_to_string(parser->token->type));
+        step(parser);
+        skip_semicolons(parser);
+        return parse(parser);
     }
 
     if (!(parser->flags & PARSING_VALUE)) {
+        if (parser->token->type == TOKEN_LSQUARE)
+            stmt = parse_index(parser, stmt);
+
+        if ((parser->token->type == TOKEN_PLUS || parser->token->type == TOKEN_MINUS) && peek(parser, 1)->type == parser->token->type)
+            stmt = parse_post_operation(parser, stmt);
+
         if (parser->token->type == TOKEN_EQUAL)
             stmt = parse_assignment(parser, stmt);
 
@@ -892,7 +1041,17 @@ static FOB_AST *parse(Parser *parser) {
         return stmt;
     }
 
+    if (parser->flags & PARSING_SINGLE_VALUE) {
+        skip_semicolons(parser);
+        return stmt;
+    }
+
     while (true) {
+        if ((parser->token->type == TOKEN_PLUS || parser->token->type == TOKEN_MINUS) && peek(parser, 1)->type == parser->token->type) {
+            stmt = parse_post_operation(parser, stmt);
+            continue;
+        }
+
         if (!(parser->flags & PARSING_ARITHMETIC) && is_arithmetic_operator_token(parser)) {
             stmt = parse_arithmetic(parser, stmt);
             continue;
@@ -900,6 +1059,11 @@ static FOB_AST *parse(Parser *parser) {
 
         if (!(parser->flags & PARSING_CONDITION) && is_conditional_operator_token(parser)) {
             stmt = parse_condition(parser, stmt);
+            continue;
+        }
+
+        if (parser->token->type == TOKEN_LSQUARE) {
+            stmt = parse_index(parser, stmt);
             continue;
         }
 
