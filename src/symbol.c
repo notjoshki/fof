@@ -1,20 +1,21 @@
 #include "symbol.h"
 #include "scope.h"
 #include "fob_data_type.h"
+#include "error.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
 #include <assert.h>
 
-#define SYMBOL_CAPACITY 8
+#define SYMBOL_CAPACITY 1000
 
-static Symbol *symbols = NULL;
+static Symbol symbols[SYMBOL_CAPACITY];
 static size_t symbol_count = 0;
-static size_t symbol_capacity = SYMBOL_CAPACITY;
+//static size_t symbol_capacity = SYMBOL_CAPACITY;
 
 void delete_symbols() {
-    if (symbols != NULL) {
+    //if (symbols != NULL) {
         for (size_t i = 0; i < symbol_count; i++) {
             Symbol *symbol = &symbols[i];
 
@@ -24,23 +25,33 @@ void delete_symbols() {
             assert(symbol->type == SYMBOL_FUNCTION);
             fob_delete_ast_list(symbol->function_parameters, true);
             free(symbol->function_parameters);
+            free(symbol->name);
         }
 
-        free(symbols);
-        symbols = NULL;
-    }
+        //free(symbols);
+        //symbols = NULL;
+    //}
 
     symbol_count = 0;
-    symbol_capacity = SYMBOL_CAPACITY;
+    //symbol_capacity = SYMBOL_CAPACITY;
 }
 
 Symbol *create_symbol(size_t uid, Symbol_Type type, char *name, FOB_Data_Type data_type, Scope scope) {
+    /*
     if (symbols == NULL)
         symbols = malloc(SYMBOL_CAPACITY * sizeof(Symbol));
 
     if (symbol_count + 1 > symbol_capacity) {
         symbol_capacity *= 2;
         symbols = realloc(symbols, symbol_capacity * sizeof(Symbol));
+    }
+    */
+
+    assert(symbol_count + 1 < SYMBOL_CAPACITY);
+
+    if (symbol_count + 1 == SYMBOL_CAPACITY) {
+        log_compiler_error("Symbol table overflow\n");
+        return NULL;
     }
 
     symbols[symbol_count] = (Symbol){ .uid = uid, .type = type, .name = name, .data_type = data_type, .scope = scope, .predefined_only = false };
@@ -54,7 +65,8 @@ static inline bool is_in_scope(const Scope *symbol_scope, const Scope *scope) {
 }
 
 Symbol *find_symbol(Symbol_Type type, char *name, const Scope *scope) {
-    if (symbols == NULL || symbol_count == 0)
+    //if (symbols == NULL || symbol_count == 0)
+    if (symbol_count == 0)
         return NULL;
 
     for (size_t i = 0; i < symbol_count; i++) {
@@ -69,7 +81,8 @@ Symbol *find_symbol(Symbol_Type type, char *name, const Scope *scope) {
 }
 
 Symbol *find_symbol_by_uid(Symbol_Type type, const size_t uid) {
-    if (symbols == NULL || symbol_count == 0)
+    //if (symbols == NULL || symbol_count == 0)
+    if (symbol_count == 0)
         return NULL;
 
     for (size_t i = 0; i < symbol_count; i++) {
@@ -83,7 +96,8 @@ Symbol *find_symbol_by_uid(Symbol_Type type, const size_t uid) {
 }
 
 Symbol *find_function_symbol_by_function_uid(Symbol_Type type, const size_t uid) {
-    if (symbols == NULL || symbol_count == 0)
+    //if (symbols == NULL || symbol_count == 0)
+    if (symbol_count == 0)
         return NULL;
 
     for (size_t i = 0; i < symbol_count; i++) {
