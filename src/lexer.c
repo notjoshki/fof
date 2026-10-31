@@ -12,10 +12,10 @@
 #define DIGIT_BUFFER_CAPACITY 8
 #define STRING_CAPACITY 8
 
-#define KEYWORD_COUNT 4
+#define KEYWORD_COUNT 9
 
 static const char *keywords[KEYWORD_COUNT] = {
-    "return", "if", "else", "asm"
+    "return", "if", "else", "asm", "for", "break", "continue", "while", "do"
 };
 
 static bool is_keyword(char *identifier) {
@@ -310,6 +310,8 @@ Token get_next_token(Lexer *lexer) {
             if (peek(lexer, 1) == '=')
                 return create_token_and_step(lexer, TOKEN_NOT_EQUAL, "!=", 2);
             return create_token_and_step(lexer, TOKEN_BOOL_NOT, "!", 1);
+        case '[': return create_token_and_step(lexer, TOKEN_LSQUARE, "[", 1);
+        case ']': return create_token_and_step(lexer, TOKEN_RSQUARE, "]", 1);
         default: break;
     }
 
