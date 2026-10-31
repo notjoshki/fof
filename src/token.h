@@ -36,7 +36,9 @@ typedef enum {
     TOKEN_SHIFTR,
     TOKEN_BOOL_AND,
     TOKEN_BOOL_OR,
-    TOKEN_BOOL_NOT
+    TOKEN_BOOL_NOT,
+    TOKEN_LSQUARE,
+    TOKEN_RSQUARE
 } Token_Type;
 
 typedef struct {

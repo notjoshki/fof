@@ -44,6 +44,8 @@ char *token_type_to_string(const Token_Type type) {
         case TOKEN_BOOL_AND: return "boolean and";
         case TOKEN_BOOL_OR: return "boolean or";
         case TOKEN_BOOL_NOT: return "boolean not";
+        case TOKEN_LSQUARE: return "lsquare";
+        case TOKEN_RSQUARE: return "rsquare";
         default: break;
     }
 
