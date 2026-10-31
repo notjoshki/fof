@@ -133,6 +133,12 @@ typedef struct {
 } FOB_Operand_Deref;
 
 typedef struct {
+    size_t pointer_register_number;
+    size_t offset_register_number;
+    FOB_Data_Type data_type;
+} FOB_Operand_Index;
+
+typedef struct {
     FOB_Operand_Type type;
     FOB_Data_Type data_type;
 
@@ -146,6 +152,7 @@ typedef struct {
         FOB_Operand_Label label;
         FOB_Operand_Argument argument;
         FOB_Operand_Deref deref;
+        FOB_Operand_Index index;
     } value;
 } FOB_Operand;
 
@@ -160,6 +167,8 @@ typedef struct {
     size_t count;
     size_t capacity;
     size_t label_count;
+    size_t current_break_label_number;
+    size_t current_continue_label_number;
 } FOB_IR;
 
 static inline FOB_Op fob_create_fob_op(FOB_Opcode type, FOB_Operand destination, FOB_Operand source) {
@@ -177,8 +186,10 @@ static inline FOB_Operand fob_create_fob_operand_float(FOB_Data_Type data_type, 
         .value.float_ = (FOB_Operand_Float){ .primitive_type = data_type.primitive_type, .float_const = float_const }};
 }
 
-static inline FOB_Operand fob_create_fob_operand_string(char *string) {
-    return (FOB_Operand){ .type = FOB_OPER_STRING, .data_type = fob_create_data_type(FOB_PRIM_VOID), .value.string.string = string };
+static inline FOB_Operand fob_create_fob_operand_string(char *text) {
+    FOB_Data_Type dt = fob_create_data_type(FOB_PRIM_CHAR);
+    dt.pointers++;
+    return (FOB_Operand){ .type = FOB_OPER_STRING, .data_type = dt, .value.string.string = text };
 }
 
 static inline FOB_Operand fob_create_fob_operand_register(FOB_Data_Type data_type, size_t number) {

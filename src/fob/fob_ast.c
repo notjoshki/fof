@@ -35,6 +35,13 @@ FOB_AST *fob_new_ast_constant(FOB_Data_Type data_type, FOB_AST_Constant_Value va
     return ast;
 }
 
+FOB_AST *fob_new_ast_string(char *text) {
+    FOB_AST *ast = new_ast();
+    ast->type = FOB_AST_STRING;
+    ast->value.string.text = text;
+    return ast;
+}
+
 FOB_AST *fob_new_ast_function(char *name, FOB_Data_Type data_type, FOB_AST_List parameters, FOB_AST_List body, size_t flags) {
     FOB_AST *ast = new_ast();
     ast->type = FOB_AST_FUNCTION;
@@ -186,11 +193,71 @@ FOB_AST *fob_new_ast_dereference(FOB_AST *value) {
     return ast;
 }
 
+FOB_AST *fob_new_ast_index(FOB_AST *pointer, FOB_AST *offset) {
+    FOB_AST *ast = new_ast();
+    ast->type = FOB_AST_INDEX;
+    ast->value.index.pointer = pointer;
+    ast->value.index.offset = offset;
+    return ast;
+}
+
+FOB_AST *fob_new_ast_pre_operation(FOB_AST_Operator_Type type, FOB_AST *value) {
+    FOB_AST *ast = new_ast();
+    ast->type = FOB_AST_PRE_OPER;
+    ast->value.pre_operation.type = type;
+    ast->value.pre_operation.value = value;
+    return ast;
+}
+
+FOB_AST *fob_new_ast_post_operation(FOB_AST_Operator_Type type, FOB_AST *value) {
+    FOB_AST *ast = new_ast();
+    ast->type = FOB_AST_POST_OPER;
+    ast->value.post_operation.type = type;
+    ast->value.post_operation.value = value;
+    return ast;
+}
+
+FOB_AST *fob_new_ast_for(FOB_AST *statement, FOB_AST *condition, FOB_AST *repeater, FOB_AST_List body) {
+    FOB_AST *ast = new_ast();
+    ast->type = FOB_AST_FOR;
+    ast->value.for_.statement = statement;
+    ast->value.for_.condition = condition;
+    ast->value.for_.repeater = repeater;
+    ast->value.for_.body = body;
+    return ast;
+}
+
+FOB_AST *fob_new_ast_break() {
+    FOB_AST *ast = new_ast();
+    ast->type = FOB_AST_BREAK;
+    return ast;
+}
+
+FOB_AST *fob_new_ast_continue() {
+    FOB_AST *ast = new_ast();
+    ast->type = FOB_AST_CONTINUE;
+    return ast;
+}
+
+FOB_AST *fob_new_ast_while(FOB_AST *condition, FOB_AST_List body, bool do_body_first) {
+    FOB_AST *ast = new_ast();
+    ast->type = FOB_AST_WHILE;
+    ast->value.while_.condition = condition;
+    ast->value.while_.body = body;
+    ast->value.while_.do_body_first = do_body_first;
+    return ast;
+}
+
 void fob_delete_ast(FOB_AST *ast) {
     switch (ast->type) {
         case FOB_AST_OPERATOR:
         case FOB_AST_CONSTANT:
+        case FOB_AST_BREAK:
+        case FOB_AST_CONTINUE:
         case FOB_AST_NOP: break;
+        case FOB_AST_STRING:
+            free(ast->value.string.text);
+            break;
         case FOB_AST_FUNCTION:
             free(ast->value.function.name);
             fob_delete_ast_list(&ast->value.function.parameters, true);
@@ -253,6 +320,32 @@ void fob_delete_ast(FOB_AST *ast) {
         case FOB_AST_DEREFERENCE:
             fob_delete_ast(ast->value.dereference.value);
             break;
+        case FOB_AST_INDEX:
+            fob_delete_ast(ast->value.index.pointer);
+            fob_delete_ast(ast->value.index.offset);
+            break;
+        case FOB_AST_PRE_OPER:
+            fob_delete_ast(ast->value.pre_operation.value);
+            break;
+        case FOB_AST_POST_OPER:
+            fob_delete_ast(ast->value.post_operation.value);
+            break;
+        case FOB_AST_FOR:
+            if (ast->value.for_.statement != NULL)
+                fob_delete_ast(ast->value.for_.statement);
+
+            if (ast->value.for_.condition != NULL)
+                fob_delete_ast(ast->value.for_.condition);
+
+            if (ast->value.for_.repeater != NULL)
+                fob_delete_ast(ast->value.for_.repeater);
+
+            fob_delete_ast_list(&ast->value.for_.body, true);
+            break;
+        case FOB_AST_WHILE:
+            fob_delete_ast(ast->value.while_.condition);
+            fob_delete_ast_list(&ast->value.while_.body, true);
+            break;
         default:
             fob_alert("Uncaught AST type %u (%p)\n", ast->type, (void *)ast);
             break;
@@ -265,6 +358,7 @@ char *fob_ast_type_to_string(const FOB_AST_Type type) {
     switch (type) {
         case FOB_AST_NOP: return "nop";
         case FOB_AST_CONSTANT: return "constant";
+        case FOB_AST_STRING: return "string";
         case FOB_AST_FUNCTION: return "function";
         case FOB_AST_PARAMETER: return "parameter";
         case FOB_AST_RETURN: return "return";
@@ -282,6 +376,13 @@ char *fob_ast_type_to_string(const FOB_AST_Type type) {
         case FOB_AST_POINTER: return "pointer";
         case FOB_AST_CALL: return "call";
         case FOB_AST_DEREFERENCE: return "dereference";
+        case FOB_AST_INDEX: return "index";
+        case FOB_AST_PRE_OPER: return "pre-operation";
+        case FOB_AST_POST_OPER: return "post-operation";
+        case FOB_AST_FOR: return "for";
+        case FOB_AST_BREAK: return "break";
+        case FOB_AST_CONTINUE: return "continue";
+        case FOB_AST_WHILE: return "while";
         default: break;
     }
 
@@ -317,6 +418,11 @@ FOB_Data_Type fob_get_ast_data_type(const FOB_AST *ast) {
         case FOB_AST_INLINE_ASM:
         case FOB_AST_NOP: return fob_create_data_type(FOB_PRIM_VOID);
         case FOB_AST_CONSTANT: return ast->value.constant.data_type;
+        case FOB_AST_STRING: {
+            FOB_Data_Type dt = fob_create_data_type(FOB_PRIM_CHAR);
+            dt.pointers++;
+            return dt;
+        }
         case FOB_AST_FUNCTION: return ast->value.function.data_type;
         case FOB_AST_PARAMETER: return ast->value.parameter.data_type;
         case FOB_AST_RETURN: return ast->value.return_.return_type;
@@ -344,6 +450,17 @@ FOB_Data_Type fob_get_ast_data_type(const FOB_AST *ast) {
 
             return dt;
         }
+        case FOB_AST_INDEX: {
+            FOB_Data_Type dt = fob_get_ast_data_type(ast->value.index.pointer);
+            assert(dt.pointers > 0);
+
+            if (dt.pointers > 0)
+                dt.pointers--;
+
+            return dt;
+        }
+        case FOB_AST_PRE_OPER: return fob_get_ast_data_type(ast->value.pre_operation.value);
+        case FOB_AST_POST_OPER: return fob_get_ast_data_type(ast->value.post_operation.value);
         default: break;
     }
 

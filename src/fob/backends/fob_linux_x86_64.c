@@ -4,6 +4,7 @@
 
 // TOFIX:
 // @hardcoded: Hardcoded temporary registers. Unlikely to cause damage now, but will when register variables are added.
+// @implement: Unimplimented features.
 
 #include "fob_ir.h"
 #include "fob_data_type.h"
@@ -263,6 +264,25 @@ static char *fob_operand_float_to_string(const FOB_Operand *operand, FOB_Backend
     return deref;
 }
 
+static char *fob_operand_string_to_string(const FOB_Operand *operand, FOB_Backend *backend, const bool dereference) {
+    char *label = malloc(16);
+    sprintf(label, ".c%zu", backend->function_rodata_constant_count++);
+
+    char *data = malloc(strlen(label) + strlen(operand->value.string.string) + 13);
+    sprintf(data, "%s: db `%s`\n", label, operand->value.string.string);
+
+    append_new_function_rodata(data, backend);
+    free(data);
+
+    if (!dereference)
+        return label;
+
+    char *code = malloc(strlen(label) + 11);
+    sprintf(code, "qword [%s]", label);
+    free(label);
+    return code;
+}
+
 static size_t ir_register_to_hardware_register_number(const size_t number, const bool is_float) {
     switch (number) {
         case FOB_TEMPORARY_IR_REGISTER_1: return is_float ? 6 : (size_t)FOB_HW_RAX;
@@ -454,6 +474,7 @@ static char *fob_operand_to_string(const FOB_Operand *operand, FOB_Backend *back
     switch (operand->type) {
         case FOB_OPER_INT: return fob_operand_int_to_string(operand);
         case FOB_OPER_FLOAT: return fob_operand_float_to_string(operand, backend, true);
+        case FOB_OPER_STRING: return fob_operand_string_to_string(operand, backend, true);
         case FOB_OPER_REGISTER: return fob_operand_register_to_string(operand, false);
         case FOB_OPER_VARIABLE: return fob_operand_variable_to_string(operand, backend);
         case FOB_OPER_LABEL: return fob_operand_label_to_string(operand);
@@ -666,6 +687,15 @@ static char *emit_load_memory(const FOB_Op *op, FOB_Backend *backend) {
     char *dst_str;
     char *src_str = fob_operand_to_string(src, backend);
     char *code;
+
+    if (src->type == FOB_OPER_STRING) {
+        dst_str = fob_operand_to_string(dst, backend);
+        code = malloc(strlen(dst_str) + strlen(src_str) + 12);
+        sprintf(code, "lea %s, %s\n", dst_str, src_str);
+        free(dst_str);
+        free(src_str);
+        return code;
+    }
 
     switch (dst_prim) {
         case FOB_PRIM_BOOL:
@@ -1473,8 +1503,9 @@ char *fob_emit_ir(const FOB_IR *ir, const char *entrypoint_name) {
     if (entrypoint_name == NULL)
         code = calloc(1, sizeof(char));
     else {
-        code = malloc(strlen(entrypoint_name) + 117);
-        sprintf(code, "section .text\nglobal _start\n_start:\nmov rdi, qword [rsp]\nlea rsi, [rsp+8]\ncall %s_\nmov rdi, rax\nmov rax, 60\nsyscall\n", entrypoint_name);
+        const char *template = "default rel\nsection .text\nglobal _start\n_start:\nmov rdi, qword [rsp]\nlea rsi, [rsp+8]\ncall %s_\nmov rdi, rax\nmov rax, 60\nsyscall\n";
+        code = malloc(strlen(entrypoint_name) + strlen(template) + 1);
+        sprintf(code, template, entrypoint_name);
     }
 
     for (size_t i = 0; i < ir->count; i++) {
@@ -1486,4 +1517,8 @@ char *fob_emit_ir(const FOB_IR *ir, const char *entrypoint_name) {
 
     delete_backend(&backend);
     return code;
+}
+
+size_t data_type_to_hardware_byte_size(const FOB_Data_Type *data_type) {
+    return primitive_type_to_allocation_size(fob_data_type_to_primitive_type(data_type));
 }

@@ -5,10 +5,7 @@
 #ifndef FOB_BACKEND_H
 #define FOB_BACKEND_H
 
-typedef enum {
-    FOB_LINUX_X86_64
-} FOB_Architecture;
-
 char *fob_emit_ir(const FOB_IR *ir, const char *entrypoint_name);
+size_t data_type_to_hardware_byte_size(const FOB_Data_Type *data_type);
 
 #endif

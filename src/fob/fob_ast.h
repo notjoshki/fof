@@ -15,6 +15,7 @@
 typedef enum {
     FOB_AST_NOP,
     FOB_AST_CONSTANT,
+    FOB_AST_STRING,
     FOB_AST_FUNCTION,
     FOB_AST_PARAMETER,
     FOB_AST_RETURN,
@@ -31,7 +32,14 @@ typedef enum {
     FOB_AST_INLINE_ASM,
     FOB_AST_POINTER,
     FOB_AST_CALL,
-    FOB_AST_DEREFERENCE
+    FOB_AST_DEREFERENCE,
+    FOB_AST_INDEX,
+    FOB_AST_PRE_OPER,
+    FOB_AST_POST_OPER,
+    FOB_AST_FOR,
+    FOB_AST_BREAK,
+    FOB_AST_CONTINUE,
+    FOB_AST_WHILE
 } FOB_AST_Type;
 
 typedef struct FOB_AST FOB_AST;
@@ -55,6 +63,10 @@ typedef struct {
     FOB_Data_Type data_type;
     FOB_AST_Constant_Value value;
 } FOB_AST_Constant;
+
+typedef struct {
+    char *text;
+} FOB_AST_String;
 
 typedef struct {
     char *name;
@@ -166,12 +178,41 @@ typedef struct {
     FOB_AST *value;
 } FOB_AST_Dereference;
 
+typedef struct {
+    FOB_AST *pointer;
+    FOB_AST *offset;
+} FOB_AST_Index;
+
+typedef struct {
+    FOB_AST_Operator_Type type;
+    FOB_AST *value;
+} FOB_AST_Pre_Operation;
+
+typedef struct {
+    FOB_AST_Operator_Type type;
+    FOB_AST *value;
+} FOB_AST_Post_Operation;
+
+typedef struct {
+    FOB_AST *statement;
+    FOB_AST *condition;
+    FOB_AST *repeater;
+    FOB_AST_List body;
+} FOB_AST_For;
+
+typedef struct {
+    FOB_AST *condition;
+    FOB_AST_List body;
+    bool do_body_first;
+} FOB_AST_While;
+
 struct FOB_AST {
     size_t uid;
     FOB_AST_Type type;
 
     union FOB_AST_Value {
         FOB_AST_Constant constant;
+        FOB_AST_String string;
         FOB_AST_Function function;
         FOB_AST_Parameter parameter;
         FOB_AST_Return return_;
@@ -189,11 +230,17 @@ struct FOB_AST {
         FOB_AST_Pointer pointer;
         FOB_AST_Call call;
         FOB_AST_Dereference dereference;
+        FOB_AST_Index index;
+        FOB_AST_Pre_Operation pre_operation;
+        FOB_AST_Post_Operation post_operation;
+        FOB_AST_For for_;
+        FOB_AST_While while_;
     } value;
 };
 
 FOB_AST *fob_new_ast_nop();
 FOB_AST *fob_new_ast_constant(FOB_Data_Type data_type, FOB_AST_Constant_Value value);
+FOB_AST *fob_new_ast_string(char *text);
 FOB_AST *fob_new_ast_function(char *name, FOB_Data_Type data_type, FOB_AST_List parameters, FOB_AST_List body, size_t flags);
 FOB_AST *fob_new_ast_parameter(char *name, FOB_Data_Type data_type, FOB_AST *default_value);
 FOB_AST *fob_new_ast_return(FOB_Data_Type return_type, FOB_AST *value);
@@ -213,6 +260,13 @@ FOB_AST *fob_new_ast_inline_assembly(char *code);
 FOB_AST *fob_new_ast_pointer(FOB_AST *value);
 FOB_AST *fob_new_ast_call(char *name, FOB_AST_List arguments, FOB_Data_Type *expected_arguments_data_types, FOB_Data_Type return_type);
 FOB_AST *fob_new_ast_dereference(FOB_AST *value);
+FOB_AST *fob_new_ast_index(FOB_AST *pointer, FOB_AST *offset);
+FOB_AST *fob_new_ast_pre_operation(FOB_AST_Operator_Type type, FOB_AST *value);
+FOB_AST *fob_new_ast_post_operation(FOB_AST_Operator_Type type, FOB_AST *value);
+FOB_AST *fob_new_ast_for(FOB_AST *statement, FOB_AST *condition, FOB_AST *repeater, FOB_AST_List body);
+FOB_AST *fob_new_ast_break();
+FOB_AST *fob_new_ast_continue();
+FOB_AST *fob_new_ast_while(FOB_AST *condition, FOB_AST_List body, bool do_body_first);
 
 void fob_delete_ast(FOB_AST *ast);
 char *fob_ast_type_to_string(const FOB_AST_Type type);

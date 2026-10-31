@@ -6,6 +6,7 @@
 #include "fob_ast.h"
 #include "fob_data_type.h"
 #include "fob_error.h"
+#include "fob_backend.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -30,7 +31,10 @@ static bool ast_is_complex_operand(const FOB_AST *ast) {
         case FOB_AST_ARITHMETIC:
         case FOB_AST_CONDITION:
         case FOB_AST_CALL:
-        case FOB_AST_DEREFERENCE: return true;
+        case FOB_AST_DEREFERENCE:
+        case FOB_AST_INDEX:
+        case FOB_AST_PRE_OPER:
+        case FOB_AST_POST_OPER: return true;
         default: return false;
     }
 }
@@ -82,6 +86,10 @@ static FOB_Operand ast_float_to_operand(const FOB_AST *ast) {
     }
 
     return oper;
+}
+
+static FOB_Operand ast_string_to_operand(const FOB_AST *ast) {
+    return fob_create_fob_operand_string(ast->value.string.text);
 }
 
 static FOB_Operand ast_variable_to_operand(const FOB_AST *ast) {
@@ -334,12 +342,77 @@ static void push_call(FOB_IR *ir, const FOB_AST *ast) {
     push_op(ir, FOB_OP_CALL, nop, fob_create_fob_identifier(ast->value.call.name));
 }
 
-FOB_Operand push_dereference(FOB_IR *ir, const FOB_AST *ast) {
+static FOB_Operand push_dereference(FOB_IR *ir, const FOB_AST *ast) {
     const FOB_Data_Type deref_type = fob_get_ast_data_type(ast);
     const FOB_Data_Type ptr_type = fob_get_ast_data_type(ast->value.dereference.value);
 
     push_load(ir, t2(ptr_type), ast_to_fob_operand(ir, ast->value.dereference.value));
     return fob_create_fob_operand_deref(FOB_TEMPORARY_IR_REGISTER_2, deref_type);
+}
+
+static FOB_Operand ast_index_to_operand(FOB_IR *ir, const FOB_AST *ast) {
+    const FOB_Data_Type index_type = fob_get_ast_data_type(ast);
+    const FOB_Data_Type ptr_type = fob_get_ast_data_type(ast->value.index.pointer);
+
+    // TOFIX: I know we only support 64 bit right now and possibly the forseeable future but consider adding USIZE support for constants.
+    const FOB_Data_Type offset_type = fob_create_data_type(FOB_PRIM_U64);
+
+    push_load(ir, t1(offset_type), ast_to_fob_operand(ir, ast->value.index.offset));
+    push_load(ir, t2(offset_type), 
+        fob_create_fob_operand_int(offset_type, (FOB_Operand_Int_Const){ .u64 = (uint64_t)data_type_to_hardware_byte_size(&index_type) }));
+
+    push_op(ir, FOB_OP_MUL, t1(offset_type), t2(offset_type));
+    push_load(ir, t2(offset_type), t1(offset_type));
+    push_load(ir, t1(ptr_type), ast_to_fob_operand(ir, ast->value.index.pointer));
+    push_op(ir, FOB_OP_ADD, t1(offset_type), t2(offset_type));
+    return fob_create_fob_operand_deref(FOB_TEMPORARY_IR_REGISTER_1, index_type);
+}
+
+static FOB_Operand ast_pre_oper_to_operand(FOB_IR *ir, const FOB_AST *ast) {
+    if (ast->value.pre_operation.type != FOB_AST_OPERATOR_ADD && ast->value.pre_operation.type != FOB_AST_OPERATOR_SUB) {
+        fob_alert("Uncaught pre-operation type %u\n", ast->value.pre_operation.type);
+        return nop;
+    }
+
+    const FOB_Data_Type dt = fob_get_ast_data_type(ast->value.pre_operation.value);
+    push_load(ir, t1(dt), ast_to_fob_operand(ir, ast->value.pre_operation.value));
+    push_load(ir, t2(dt), fob_create_fob_operand_int(fob_create_data_type(FOB_PRIM_I32), (FOB_Operand_Int_Const){ .i32 = 1 }));
+    push_op(ir, arithmetic_operator_to_opcode(ast->value.pre_operation.type), t1(dt), t2(dt));
+
+    if (!ast_is_complex_operand(ast->value.pre_operation.value)) {
+        push_op(ir, FOB_OP_STORE_MEMORY, ast_to_fob_operand(ir, ast->value.pre_operation.value), t1(dt));
+        return t1(dt);
+    }
+
+    push_op(ir, FOB_OP_PUSH, nop, t1(dt));
+    push_load(ir, t1(dt), ast_to_fob_operand(ir, ast->value.pre_operation.value));
+    push_op(ir, FOB_OP_POP, t2(dt), nop);
+    push_op(ir, FOB_OP_STORE_MEMORY, fob_create_fob_operand_deref(FOB_TEMPORARY_IR_REGISTER_1, dt), t2(dt));
+    return t2(dt);
+}
+
+static FOB_Operand ast_post_oper_to_operand(FOB_IR *ir, const FOB_AST *ast, const bool as_value) {
+    if (ast->value.post_operation.type != FOB_AST_OPERATOR_ADD && ast->value.post_operation.type != FOB_AST_OPERATOR_SUB) {
+        fob_alert("Uncaught post-operation type %u\n", ast->value.post_operation.type);
+        return nop;
+    }
+
+    const FOB_Data_Type dt = fob_get_ast_data_type(ast->value.post_operation.value);
+    push_load(ir, t1(dt), ast_to_fob_operand(ir, ast->value.post_operation.value));
+
+    if (as_value)
+        push_op(ir, FOB_OP_PUSH, nop, t1(dt));
+
+    push_load(ir, t2(dt), fob_create_fob_operand_int(fob_create_data_type(FOB_PRIM_I32), (FOB_Operand_Int_Const){ .i32 = 1 }));
+    push_op(ir, arithmetic_operator_to_opcode(ast->value.post_operation.type), t1(dt), t2(dt));
+    push_op(ir, FOB_OP_STORE_MEMORY, ast_to_fob_operand(ir, ast->value.post_operation.value), t1(dt));
+
+    if (as_value) {
+        push_op(ir, FOB_OP_POP, t1(dt), nop);
+        return t1(dt);
+    }
+
+    return nop;
 }
 
 static FOB_Operand ast_to_fob_operand(FOB_IR *ir, const FOB_AST *ast) {
@@ -351,6 +424,7 @@ static FOB_Operand ast_to_fob_operand(FOB_IR *ir, const FOB_AST *ast) {
             if (fob_primitive_is_float(ast->value.constant.data_type.primitive_type))
                 return ast_float_to_operand(ast);
             return ast_int_to_operand(ast);
+        case FOB_AST_STRING: return ast_string_to_operand(ast);
         case FOB_AST_VARIABLE: return ast_variable_to_operand(ast);
         case FOB_AST_ARITHMETIC: return ast_arithmetic_to_operand(ir, ast);
         case FOB_AST_CONDITION: return ast_condition_to_operand(ir, ast, true);
@@ -362,6 +436,9 @@ static FOB_Operand ast_to_fob_operand(FOB_IR *ir, const FOB_AST *ast) {
             push_call(ir, ast);
             return fob_create_fob_operand_register(ast->value.call.return_type, FOB_RETURN_REGISTER_1);
         case FOB_AST_DEREFERENCE: return push_dereference(ir, ast);
+        case FOB_AST_INDEX: return ast_index_to_operand(ir, ast);
+        case FOB_AST_PRE_OPER: return ast_pre_oper_to_operand(ir, ast);
+        case FOB_AST_POST_OPER: return ast_post_oper_to_operand(ir, ast, true);
         default: break;
     }
 
@@ -431,10 +508,18 @@ static void push_declaration(FOB_IR *ir, const FOB_AST *ast) {
 }
 
 static void push_assignment(FOB_IR *ir, const FOB_AST *ast) {
-    FOB_Data_Type dt = fob_get_ast_data_type(ast->value.assignment.lhs);
-    FOB_Operand reg = t1(dt);
-    push_load(ir, reg, ast_to_fob_operand(ir, ast->value.assignment.rhs));
-    push_op(ir, FOB_OP_STORE_MEMORY, ast_to_fob_operand(ir, ast->value.assignment.lhs), reg);
+    const FOB_Data_Type dt = fob_get_ast_data_type(ast->value.assignment.lhs);
+    push_load(ir, t1(dt), ast_to_fob_operand(ir, ast->value.assignment.rhs));
+
+    if (!ast_is_complex_operand(ast->value.assignment.lhs)) {
+        push_op(ir, FOB_OP_STORE_MEMORY, ast_to_fob_operand(ir, ast->value.assignment.lhs), t1(dt));
+        return;
+    }
+
+    push_op(ir, FOB_OP_PUSH, nop, t1(dt));
+    push_load(ir, t1(dt), ast_to_fob_operand(ir, ast->value.assignment.lhs));
+    push_op(ir, FOB_OP_POP, t2(dt), nop);
+    push_op(ir, FOB_OP_STORE_MEMORY, fob_create_fob_operand_deref(FOB_TEMPORARY_IR_REGISTER_1, dt), t2(dt));
 }
 
 static void push_if(FOB_IR *ir, const FOB_AST *ast) {
@@ -466,6 +551,60 @@ static void push_inline_assembly(FOB_IR *ir, const FOB_AST *ast) {
     push_op(ir, FOB_OP_INLINE_ASM, nop, fob_create_fob_operand_string(ast->value.inline_assembly.code));
 }
 
+static void push_for(FOB_IR *ir, const FOB_AST *ast) {
+    push_op(ir, FOB_OP_BLOCK_START, nop, nop);
+    push_ast(ir, ast->value.for_.statement);
+
+    FOB_Operand condition_label = fob_create_fob_operand_label(ir->label_count++);
+    FOB_Operand repeat_label = fob_create_fob_operand_label(ir->label_count++);
+    FOB_Operand body_label = fob_create_fob_operand_label(ir->label_count++);
+    FOB_Operand end_label = fob_create_fob_operand_label(ir->label_count++);
+
+    ir->current_break_label_number = end_label.value.label.number;
+    ir->current_continue_label_number = repeat_label.value.label.number;
+
+    push_op(ir, FOB_OP_NEW_LABEL, nop, condition_label);
+    FOB_Operand condition = ast_condition_to_operand(ir, ast->value.for_.condition, true);
+    push_op(ir, FOB_OP_JMP_FALSE, end_label, condition);
+
+    push_op(ir, FOB_OP_NEW_LABEL, nop, body_label);
+    push_list(ir, &ast->value.for_.body, true);
+
+    push_op(ir, FOB_OP_NEW_LABEL, nop, repeat_label);
+    push_ast(ir, ast->value.for_.repeater);
+
+    push_op(ir, FOB_OP_JMP, condition_label, nop);
+
+    push_op(ir, FOB_OP_NEW_LABEL, nop, end_label);
+    push_op(ir, FOB_OP_BLOCK_END, nop, nop);
+}
+
+static void push_while(FOB_IR *ir, const FOB_AST *ast) {
+    FOB_Operand condition_label = fob_create_fob_operand_label(ir->label_count++);
+    FOB_Operand body_label = fob_create_fob_operand_label(ir->label_count++);
+    FOB_Operand end_label = fob_create_fob_operand_label(ir->label_count++);
+
+    if (ast->value.while_.do_body_first) {
+        push_op(ir, FOB_OP_NEW_LABEL, nop, body_label);
+        push_list(ir, &ast->value.while_.body, true);
+
+        push_op(ir, FOB_OP_NEW_LABEL, nop, condition_label);
+        FOB_Operand condition = ast_condition_to_operand(ir, ast->value.while_.condition, true);
+        push_op(ir, FOB_OP_JMP_TRUE, body_label, condition);
+        push_op(ir, FOB_OP_NEW_LABEL, nop, end_label);
+        return;
+    }
+
+
+    push_op(ir, FOB_OP_NEW_LABEL, nop, condition_label);
+    FOB_Operand condition = ast_condition_to_operand(ir, ast->value.while_.condition, true);
+    push_op(ir, FOB_OP_JMP_FALSE, end_label, condition);
+    push_op(ir, FOB_OP_NEW_LABEL, nop, body_label);
+    push_list(ir, &ast->value.while_.body, true);
+    push_op(ir, FOB_OP_JMP, condition_label, nop);
+    push_op(ir, FOB_OP_NEW_LABEL, nop, end_label);
+}
+
 static void push_ast(FOB_IR *ir, const FOB_AST *ast) {
     switch (ast->type) {
         case FOB_OP_NOP: break;
@@ -490,6 +629,27 @@ static void push_ast(FOB_IR *ir, const FOB_AST *ast) {
         case FOB_AST_CALL:
             push_call(ir, ast);
             break;
+        case FOB_AST_PRE_OPER:
+            ast_pre_oper_to_operand(ir, ast);
+            break;
+        case FOB_AST_POST_OPER:
+            ast_post_oper_to_operand(ir, ast, false);
+            break;
+        case FOB_AST_FOR:
+            push_for(ir, ast);
+            break;
+        case FOB_AST_PARENTHESES_EXPRESSION:
+            push_ast(ir, ast->value.parentheses_expression.inner_value);
+            break;
+        case FOB_AST_BREAK:
+            push_op(ir, FOB_OP_JMP, fob_create_fob_operand_label(ir->current_break_label_number), nop);
+            break;
+        case FOB_AST_CONTINUE:
+            push_op(ir, FOB_OP_JMP, fob_create_fob_operand_label(ir->current_continue_label_number), nop);
+            break;
+        case FOB_AST_WHILE:
+            push_while(ir, ast);
+            break;
         default:
             fob_alert("Uncaught AST type %u (%p)\n", ast->type, (void *)ast);
             break;
@@ -497,7 +657,9 @@ static void push_ast(FOB_IR *ir, const FOB_AST *ast) {
 }
 
 FOB_IR fob_ast_root_to_ir(FOB_AST_List *list) {
-    FOB_IR ir = (FOB_IR){ .ops = malloc(IR_CAPACITY * sizeof(FOB_Op)), .count = 0, .capacity = IR_CAPACITY, .label_count = 0 };
+    FOB_IR ir = (FOB_IR){ .ops = malloc(IR_CAPACITY * sizeof(FOB_Op)), .count = 0, .capacity = IR_CAPACITY, .label_count = 0,
+        .current_break_label_number = 0, .current_continue_label_number = 0 };
+
     push_list(&ir, list, false);
     push_op(&ir, FOB_OP_EOF, nop, nop);
     return ir;

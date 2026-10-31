@@ -31,7 +31,9 @@ static inline void omit(FOB_Op *op) {
 static void do_pass(FOB_Generic_Optimizer *optimizer);
 
 void fob_optimize_ir(FOB_IR *ir, const FOB_Optimization_Level level) {
-    (void)level;
+    if (level == FOB_OPTIMIZATION_NONE)
+        return;
+
     FOB_Generic_Optimizer opt = create_generic_optimizer(ir);
 
     for (size_t i = 0; i < PASS_COUNT; i++)
