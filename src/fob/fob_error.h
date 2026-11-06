@@ -13,7 +13,7 @@ void _fob_alert_increment_errors_thrown();
 
 #define fob_alert(...) \
     do { \
-        fprintf(stderr, "fob: %s: %s: ", __FILE__, __func__); \
+        fprintf(stderr, "fob: %s: %s:%u: ", __FILE__, __func__, __LINE__); \
         fprintf(stderr, __VA_ARGS__); \
         _fob_alert_increment_errors_thrown(); \
     } while (0)
