@@ -91,12 +91,14 @@ typedef struct {
     char *name;
     FOB_Data_Type data_type;
     FOB_AST *value;
+    bool is_global;
 } FOB_AST_Declaration;
 
 typedef struct {
     char *name;
     size_t uid;
     FOB_Data_Type data_type;
+    bool is_global;
 } FOB_AST_Variable;
 
 typedef struct {
@@ -244,8 +246,8 @@ FOB_AST *fob_new_ast_string(char *text);
 FOB_AST *fob_new_ast_function(char *name, FOB_Data_Type data_type, FOB_AST_List parameters, FOB_AST_List body, size_t flags);
 FOB_AST *fob_new_ast_parameter(char *name, FOB_Data_Type data_type, FOB_AST *default_value);
 FOB_AST *fob_new_ast_return(FOB_Data_Type return_type, FOB_AST *value);
-FOB_AST *fob_new_ast_declaration(char *name, FOB_Data_Type data_type, FOB_AST *value);
-FOB_AST *fob_new_ast_variable(char *name, size_t uid, FOB_Data_Type data_type);
+FOB_AST *fob_new_ast_declaration(char *name, FOB_Data_Type data_type, FOB_AST *value, bool is_global);
+FOB_AST *fob_new_ast_variable(char *name, size_t uid, FOB_Data_Type data_type, bool is_global);
 FOB_AST *fob_new_ast_assignment(FOB_AST *lhs, FOB_AST *rhs);
 FOB_AST *fob_new_ast_arithmetic(FOB_AST_List expression, FOB_Data_Type result_type);
 FOB_AST *fob_new_ast_operator(FOB_AST_Operator_Type type);

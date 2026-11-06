@@ -326,13 +326,25 @@ static FOB_AST *parse_declaration(Parser *parser, char *type, char *name, const 
         value = parse_value(parser);
     }
 
-    FOB_AST *ast = fob_new_ast_declaration(name, dt, value);
+    Symbol *symbol = find_symbol(SYMBOL_VARIABLE, name, &parser->scope);
+
+    if (symbol != NULL) {
+        log_error(ERROR_CRITICAL, "Redefinition of variable '%s'\n", name);
+        free(name);
+
+        if (value != NULL)
+            fob_delete_ast(value);
+
+        return fob_new_ast_nop();
+    }
+
+    FOB_AST *ast = fob_new_ast_declaration(name, dt, value, parser->scope.function_uid == 0);
     create_symbol(ast->uid, SYMBOL_VARIABLE, name, dt, parser->scope);
     return ast;
 }
 
 static FOB_AST *parse_variable(char *name, const Symbol *symbol) {
-    return fob_new_ast_variable(name, symbol->uid, symbol->data_type);
+    return fob_new_ast_variable(name, symbol->uid, symbol->data_type, symbol->scope.function_uid == 0);
 }
 
 static char *parse_initial_identifier(Parser *parser, size_t *out_modifiers) {

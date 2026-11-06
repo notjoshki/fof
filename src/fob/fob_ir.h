@@ -24,7 +24,8 @@ typedef enum {
     FOB_OP_RETURN,
     FOB_OP_LOAD_CONST,
     FOB_OP_LOAD_MEMORY,
-    FOB_OP_NEW_LOCAL_VARIABLE,
+    FOB_OP_NEW_VARIABLE,
+    FOB_OP_NEW_GLOBAL_VARIABLE,
     FOB_OP_STORE_MEMORY,
     FOB_OP_PUSH,
     FOB_OP_POP,
@@ -114,6 +115,7 @@ typedef struct {
     char *name;
     size_t uid;
     FOB_Data_Type data_type;
+    bool is_global;
 } FOB_Operand_Variable;
 
 typedef struct {
@@ -202,9 +204,9 @@ static inline FOB_Operand fob_create_fob_identifier(char *name) {
         .value.identifier.name = name };
 }
 
-static inline FOB_Operand fob_create_fob_operand_variable(char *name, size_t uid, FOB_Data_Type data_type) {
+static inline FOB_Operand fob_create_fob_operand_variable(char *name, size_t uid, FOB_Data_Type data_type, bool is_global) {
     return (FOB_Operand){ .type = FOB_OPER_VARIABLE, .data_type = data_type, .value.variable = (FOB_Operand_Variable){
-        .name = name, .uid = uid, .data_type = data_type }};
+        .name = name, .uid = uid, .data_type = data_type, .is_global = is_global }};
 }
 
 static inline FOB_Operand fob_create_fob_operand_label(size_t number) {

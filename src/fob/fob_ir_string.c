@@ -157,11 +157,21 @@ static char *ir_load_or_store_to_string(const FOB_Op *op) {
     return str;
 }
 
-static char *ir_new_local_variable_to_string(const FOB_Op *op) {
+static char *ir_new_variable_to_string(const FOB_Op *op) {
     char *dst = ir_operand_to_string(&op->destination);
     char *str = malloc(strlen(dst) + 8);
     sprintf(str, "new %s\n", dst);
     free(dst);
+    return str;
+}
+
+static char *ir_new_global_variable_to_string(const FOB_Op *op) {
+    char *dst = ir_operand_to_string(&op->destination);
+    char *src = ir_operand_to_string(&op->source);
+    char *str = malloc(strlen(dst) + strlen(src) + 18);
+    sprintf(str, "new_global %s = %s\n", dst, src);
+    free(dst);
+    free(src);
     return str;
 }
 
@@ -433,7 +443,8 @@ static char *ir_op_to_string(const FOB_Op *op) {
         case FOB_OP_LOAD_CONST:
         case FOB_OP_LOAD_MEMORY:
         case FOB_OP_STORE_MEMORY: return ir_load_or_store_to_string(op);
-        case FOB_OP_NEW_LOCAL_VARIABLE: return ir_new_local_variable_to_string(op);
+        case FOB_OP_NEW_VARIABLE: return ir_new_variable_to_string(op);
+        case FOB_OP_NEW_GLOBAL_VARIABLE: return ir_new_global_variable_to_string(op);
         case FOB_OP_PUSH: return ir_push_to_string(op);
         case FOB_OP_POP: return ir_pop_to_string(op);
         case FOB_OP_AND: return ir_and_to_string(op);

@@ -93,7 +93,7 @@ static FOB_Operand ast_string_to_operand(const FOB_AST *ast) {
 }
 
 static FOB_Operand ast_variable_to_operand(const FOB_AST *ast) {
-    return fob_create_fob_operand_variable(ast->value.variable.name, ast->value.variable.uid, ast->value.variable.data_type);
+    return fob_create_fob_operand_variable(ast->value.variable.name, ast->value.variable.uid, ast->value.variable.data_type, ast->value.variable.is_global);
 }
 
 static FOB_Arithmetic_Precedence arithmetic_operator_to_precedence(const FOB_AST_Operator_Type type) {
@@ -472,8 +472,8 @@ static void push_function(FOB_IR *ir, const FOB_AST *ast) {
 
     for (size_t i = 0; i < ast->value.function.parameters.count; i++) {
         const FOB_AST *param = ast->value.function.parameters.nodes[i];
-        FOB_Operand var = fob_create_fob_operand_variable(param->value.parameter.name, param->uid, param->value.parameter.data_type);
-        push_op(ir, FOB_OP_NEW_LOCAL_VARIABLE, var, nop);
+        FOB_Operand var = fob_create_fob_operand_variable(param->value.parameter.name, param->uid, param->value.parameter.data_type, false);
+        push_op(ir, FOB_OP_NEW_VARIABLE, var, nop);
         push_op(ir, FOB_OP_STORE_MEMORY, var, fob_create_fob_operand_argument(i, int_args, float_args, var.data_type));
 
         if (fob_data_type_is_float(&var.data_type))
@@ -496,8 +496,14 @@ static void push_return(FOB_IR *ir, const FOB_AST *ast) {
 }
 
 static void push_declaration(FOB_IR *ir, const FOB_AST *ast) {
-    FOB_Operand var = fob_create_fob_operand_variable(ast->value.declaration.name, ast->uid, ast->value.declaration.data_type);
-    push_op(ir, FOB_OP_NEW_LOCAL_VARIABLE, var, nop);
+    FOB_Operand var = fob_create_fob_operand_variable(ast->value.declaration.name, ast->uid, ast->value.declaration.data_type, ast->value.declaration.is_global);
+
+    if (ast->value.declaration.is_global) {
+        push_op(ir, FOB_OP_NEW_GLOBAL_VARIABLE, var, ast_to_fob_operand(ir, ast->value.declaration.value));
+        return;
+    }
+
+    push_op(ir, FOB_OP_NEW_VARIABLE, var, nop);
 
     if (ast->value.declaration.value == NULL)
         return;

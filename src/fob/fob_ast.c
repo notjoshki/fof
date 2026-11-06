@@ -70,21 +70,23 @@ FOB_AST *fob_new_ast_return(FOB_Data_Type return_type, FOB_AST *value) {
     return ast;
 }
 
-FOB_AST *fob_new_ast_declaration(char *name, FOB_Data_Type data_type, FOB_AST *value) {
+FOB_AST *fob_new_ast_declaration(char *name, FOB_Data_Type data_type, FOB_AST *value, bool is_global) {
     FOB_AST *ast = new_ast();
     ast->type = FOB_AST_DECLARATION;
     ast->value.declaration.name = name;
     ast->value.declaration.data_type = data_type;
     ast->value.declaration.value = value;
+    ast->value.declaration.is_global = is_global;
     return ast;
 }
 
-FOB_AST *fob_new_ast_variable(char *name, size_t uid, FOB_Data_Type data_type) {
+FOB_AST *fob_new_ast_variable(char *name, size_t uid, FOB_Data_Type data_type, bool is_global) {
     FOB_AST *ast = new_ast();
     ast->type = FOB_AST_VARIABLE;
     ast->value.variable.name = name;
     ast->value.variable.uid = uid;
     ast->value.variable.data_type = data_type;
+    ast->value.variable.is_global = is_global;
     return ast;
 }
 

@@ -28,7 +28,8 @@
 #define TEMP_FLOAT_REGISTER_NUM_2 (size_t)8
 
 #define FUNCTION_RODATA_CAPACITY 16
-#define LOCAL_VARIABLE_CAPACITY 4
+#define VARIABLE_CAPACITY 8
+#define GLOBAL_DATA_CAPACITY 32
 
 #define REGISTER_ARGUMENT_CAPACITY 6
 
@@ -56,15 +57,16 @@ typedef enum {
     FOB_HW_R15
 } FOB_Hardware_Register;
 
+typedef union {
+    int stack_offset;
+    char *global_name;
+} FOB_Backend_Variable_Value;
+
 typedef struct {
     size_t uid;
     FOB_Data_Type data_type;
+    FOB_Backend_Variable_Value value;
     bool is_global;
-
-    union FOB_Backend_Variable_Value {
-        int stack_offset;
-        char *global_name;
-    } value;
 } FOB_Backend_Variable;
 
 typedef struct {
@@ -74,13 +76,16 @@ typedef struct {
     size_t function_rodata_length;
     size_t function_rodata_capacity;
     size_t function_rodata_constant_count;
-    FOB_Backend_Variable *local_variables;
-    size_t local_variable_count;
-    size_t local_variable_capacity;
+    FOB_Backend_Variable *variables;
+    size_t variable_count;
+    size_t variable_capacity;
     size_t *cached_stack_bytes_allocated;
     size_t *cached_stack_bytes_used;
     size_t stack_cache_count;
     size_t stack_cache_capacity;
+    char *global_data;
+    size_t global_data_length;
+    size_t global_data_capacity;
 } FOB_Backend;
 
 static inline char float_word_char(const FOB_Primitive_Type type) {
@@ -146,19 +151,21 @@ static FOB_Backend create_backend() {
     FOB_Backend backend = (FOB_Backend){ .stack_bytes_used = 0, .stack_bytes_allocated = 0,
         .function_rodata = malloc(FUNCTION_RODATA_CAPACITY + 1), .function_rodata_length = 0,
         .function_rodata_capacity = FUNCTION_RODATA_CAPACITY, .function_rodata_constant_count = 0,
-        .local_variables = malloc(LOCAL_VARIABLE_CAPACITY * sizeof(FOB_Backend_Variable)), 
-        .local_variable_count = 0, .local_variable_capacity = LOCAL_VARIABLE_CAPACITY,
+        .variables = malloc(VARIABLE_CAPACITY * sizeof(FOB_Backend_Variable)), 
+        .variable_count = 0, .variable_capacity = VARIABLE_CAPACITY,
         .cached_stack_bytes_allocated = malloc(STACK_CACHE_CAPACITY * sizeof(size_t)),
         .cached_stack_bytes_used = malloc(STACK_CACHE_CAPACITY * sizeof(size_t)),
-        .stack_cache_count = 0, .stack_cache_capacity = STACK_CACHE_CAPACITY };
+        .stack_cache_count = 0, .stack_cache_capacity = STACK_CACHE_CAPACITY,
+        .global_data = malloc(GLOBAL_DATA_CAPACITY + 1), .global_data_length = 0, .global_data_capacity = GLOBAL_DATA_CAPACITY };
 
-    backend.function_rodata[0] = '\0';
+    backend.function_rodata[0] = backend.global_data[0] = '\0';
     return backend;
 }
 
 static void delete_backend(FOB_Backend *backend) {
     free(backend->function_rodata);
-    free(backend->local_variables);
+    free(backend->global_data);
+    free(backend->variables);
     free(backend->cached_stack_bytes_allocated);
     free(backend->cached_stack_bytes_used);
 }
@@ -168,9 +175,6 @@ static void reset_backend_to_enter_new_function(FOB_Backend *backend) {
         backend->function_rodata_length = backend->function_rodata_constant_count = 0;
     backend->function_rodata_capacity = FUNCTION_RODATA_CAPACITY;
     backend->function_rodata[0] = '\0';
-
-    backend->local_variable_count = 0;
-    backend->local_variable_capacity = LOCAL_VARIABLE_CAPACITY;
 }
 
 static void append_new_function_rodata(const char *rodata, FOB_Backend *backend) {
@@ -186,8 +190,8 @@ static void append_new_function_rodata(const char *rodata, FOB_Backend *backend)
 }
 
 static FOB_Backend_Variable *find_backend_variable(const size_t uid, const FOB_Backend *backend) {
-    for (size_t i = 0; i < backend->local_variable_count; i++) {
-        FOB_Backend_Variable *var = &backend->local_variables[i];
+    for (size_t i = 0; i < backend->variable_count; i++) {
+        FOB_Backend_Variable *var = &backend->variables[i];
 
         if (var->uid == uid)
             return var;
@@ -196,14 +200,14 @@ static FOB_Backend_Variable *find_backend_variable(const size_t uid, const FOB_B
     return NULL;
 }
 
-static void add_local_backend_variable(size_t uid, FOB_Data_Type data_type, int stack_offset, FOB_Backend *backend) {
-    if (backend->local_variable_count + 1 > backend->local_variable_capacity) {
-        backend->local_variable_capacity *= 2;
-        backend->local_variables = realloc(backend->local_variables, backend->local_variable_capacity * sizeof(FOB_Backend_Variable));
+static void add_backend_variable(size_t uid, FOB_Data_Type data_type, FOB_Backend_Variable_Value value, bool is_global, FOB_Backend *backend) {
+    if (backend->variable_count + 1 > backend->variable_capacity) {
+        backend->variable_capacity *= 2;
+        backend->variables = realloc(backend->variables, backend->variable_capacity * sizeof(FOB_Backend_Variable));
     }
 
-    backend->local_variables[backend->local_variable_count++] = (FOB_Backend_Variable){ 
-        .uid = uid, .data_type = data_type, .value.stack_offset = stack_offset };
+    backend->variables[backend->variable_count++] = (FOB_Backend_Variable){ 
+        .uid = uid, .data_type = data_type, .value = value, .is_global = is_global };
 }
 
 static char *fob_operand_int_to_string(const FOB_Operand *operand) {
@@ -232,25 +236,35 @@ static char *fob_operand_int_to_string(const FOB_Operand *operand) {
     return str;
 }
 
+static char *raw_float_to_string(const FOB_Operand *operand) {
+    const FOB_Operand_Float *float_ = &operand->value.float_;
+    char *data = malloc(32);
+
+    if (float_->primitive_type == FOB_PRIM_F32) {
+        uint32_t bits;
+        memcpy(&bits, &float_->float_const.f32, 4);
+        sprintf(data, "%" PRIu32, bits);
+    } else if (float_->primitive_type == FOB_PRIM_F64) {
+        uint64_t bits;
+        memcpy(&bits, &float_->float_const.f64, 8);
+        sprintf(data, "%" PRIu64, bits);
+    } else {
+        fob_alert("Uncaught float const primitive type %u\n", float_->primitive_type);
+        data[0] = '\0';
+    }
+
+    return data;
+}
+
 static char *fob_operand_float_to_string(const FOB_Operand *operand, FOB_Backend *backend, const bool dereferenced) {
     const FOB_Operand_Float *float_ = &operand->value.float_;
     char *label = malloc(16);
     sprintf(label, ".c%zu", backend->function_rodata_constant_count++);
 
-    char *data = malloc(strlen(label) + 32);
-
-    if (float_->primitive_type == FOB_PRIM_F32) {
-        uint32_t bits;
-        memcpy(&bits, &float_->float_const.f32, 4);
-        sprintf(data, "%s: dd %" PRIu32 "\n", label, bits);
-    } else if (float_->primitive_type == FOB_PRIM_F64) {
-        uint64_t bits;
-        memcpy(&bits, &float_->float_const.f64, 8);
-        sprintf(data, "%s: dq %" PRIu64 "\n", label, bits);
-    } else {
-        fob_alert("Uncaught float const primitive type %u\n", float_->primitive_type);
-        data[0] = '\0';
-    }
+    char *raw_float = raw_float_to_string(operand);
+    char *data = malloc(strlen(label) + strlen(raw_float) + 13);
+    sprintf(data, "%s: d%c %s\n", label, float_->primitive_type == FOB_PRIM_F32 ? 'd' : 'q', raw_float);
+    free(raw_float);
 
     append_new_function_rodata(data, backend);
     free(data);
@@ -264,12 +278,20 @@ static char *fob_operand_float_to_string(const FOB_Operand *operand, FOB_Backend
     return deref;
 }
 
+static char *raw_string_to_string(const FOB_Operand *operand, const bool null_terminator) {
+    char *data = malloc(strlen(operand->value.string.string) + 5);
+    sprintf(data, "`%s`%s", operand->value.string.string, null_terminator ? ",0" : "\0");
+    return data;
+}
+
 static char *fob_operand_string_to_string(const FOB_Operand *operand, FOB_Backend *backend, const bool dereference) {
     char *label = malloc(16);
     sprintf(label, ".c%zu", backend->function_rodata_constant_count++);
 
-    char *data = malloc(strlen(label) + strlen(operand->value.string.string) + 13);
-    sprintf(data, "%s: db `%s`\n", label, operand->value.string.string);
+    char *raw_string = raw_string_to_string(operand, true);
+    char *data = malloc(strlen(label) + strlen(raw_string) + 11);
+    sprintf(data, "%s: db %s\n", label, raw_string);
+    free(raw_string);
 
     append_new_function_rodata(data, backend);
     free(data);
@@ -403,9 +425,9 @@ static char *fob_operand_label_to_string(const FOB_Operand *operand) {
     return str;
 }
 
-static char *fob_operand_identifier_to_string(const FOB_Operand *operand) {
-    char *str = malloc(strlen(operand->value.identifier.name) + 2);
-    sprintf(str, "%s_", operand->value.identifier.name);
+static char *fob_operand_identifier_to_string(const char *identifier) {
+    char *str = malloc(strlen(identifier) + 2);
+    sprintf(str, "%s_", identifier);
     return str;
 }
 
@@ -478,7 +500,7 @@ static char *fob_operand_to_string(const FOB_Operand *operand, FOB_Backend *back
         case FOB_OPER_REGISTER: return fob_operand_register_to_string(operand, false);
         case FOB_OPER_VARIABLE: return fob_operand_variable_to_string(operand, backend);
         case FOB_OPER_LABEL: return fob_operand_label_to_string(operand);
-        case FOB_OPER_IDENTIFIER: return fob_operand_identifier_to_string(operand);
+        case FOB_OPER_IDENTIFIER: return fob_operand_identifier_to_string(operand->value.identifier.name);
         case FOB_OPER_ARGUMENT: return fob_operand_argument_to_string(operand);
         case FOB_OPER_DEREF: return fob_operand_deref_to_string(operand);
         default: break;
@@ -860,13 +882,20 @@ static char *emit_load_memory(const FOB_Op *op, FOB_Backend *backend) {
     return trunc;
 }
 
-static char *emit_new_local_variable(const FOB_Op *op, FOB_Backend *backend) {
+static char *emit_new_variable(const FOB_Op *op, FOB_Backend *backend) {
     const FOB_Operand_Variable *var = &op->destination.value.variable;
-    const size_t size = primitive_type_to_allocation_size(fob_data_type_to_primitive_type(&var->data_type));
-    backend->stack_bytes_used += size;
-    add_local_backend_variable(var->uid, var->data_type, -backend->stack_bytes_used, backend);
+    FOB_Backend_Variable_Value value;
 
-    if (backend->stack_bytes_used <= backend->stack_bytes_allocated)
+    if (!var->is_global) {
+        const size_t size = primitive_type_to_allocation_size(fob_data_type_to_primitive_type(&var->data_type));
+        backend->stack_bytes_used += size;
+        value.stack_offset = -backend->stack_bytes_used;
+    } else
+        value.global_name = var->name;
+
+    add_backend_variable(var->uid, var->data_type, value, var->is_global, backend);
+
+    if (var->is_global || backend->stack_bytes_used <= backend->stack_bytes_allocated)
         return calloc(1, sizeof(char));
 
     const size_t allocated_before = backend->stack_bytes_allocated;
@@ -877,6 +906,70 @@ static char *emit_new_local_variable(const FOB_Op *op, FOB_Backend *backend) {
     char *code = malloc(32);
     sprintf(code, "sub rsp, %zu\n", backend->stack_bytes_allocated - allocated_before);
     return code;
+}
+
+static char *emit_new_global_variable(const FOB_Op *op, FOB_Backend *backend) {
+    const FOB_Operand_Variable *var = &op->destination.value.variable;
+    assert(var->is_global);
+    add_backend_variable(var->uid, var->data_type, (FOB_Backend_Variable_Value){ .global_name = var->name }, true, backend);
+
+    const FOB_Primitive_Type prim_type = fob_data_type_to_primitive_type(&var->data_type);
+    char *name = fob_operand_identifier_to_string(var->name);
+    char define_char = 0;
+    char *value;
+
+    if (op->source.type == FOB_OPER_NONE) {
+        value = malloc(4);
+        strcpy(value, fob_primitive_is_float(prim_type) ? "0.0" : "0");
+    }
+    // These next two require labels which we can just do raw here without a label and temporary register.
+    else if (op->source.type == FOB_OPER_FLOAT)
+        value = raw_float_to_string(&op->source);
+    else if (op->source.type == FOB_OPER_STRING) {
+        if (var->data_type.pointers == 0)
+            fob_alert("String value assigned to non-pointer global variable %zu ('%s')\n", var->uid, var->name);
+
+        value = raw_string_to_string(&op->source, true);
+        define_char = 'b';
+    } else if (op->source.type == FOB_OPER_INT)
+        value = fob_operand_to_string(&op->source, backend);
+    else {
+        fob_alert("Non-constant value %u assigned on declaration to global variable %zu ('%s')\n", op->source.type, var->uid, var->name);
+        value = calloc(1, sizeof(char));
+    }
+
+    if (define_char == 0) {
+        switch (primitive_type_to_word_size(prim_type)) {
+            case FOB_WORD_BYTE:
+                define_char = 'b';
+                break;
+            case FOB_WORD_WORD:
+                define_char = 'w';
+                break;
+            case FOB_WORD_DWORD:
+                define_char = 'd';
+                break;
+            default:
+                define_char = 'q';
+                break;
+        }
+    }
+
+    char *code = malloc(strlen(name) + strlen(value) + 13);
+    sprintf(code, "%s: d%c %s\n", name, define_char, value);
+    free(name);
+    free(value);
+    const size_t len = strlen(code);
+
+    if (backend->global_data_length + len > backend->global_data_capacity) {
+        backend->global_data_capacity *= 2;
+        backend->global_data = realloc(backend->global_data, backend->global_data_capacity + 1);
+    }
+
+    strcat(backend->global_data, code);
+    free(code);
+    backend->global_data_length += len;
+    return calloc(1, sizeof(char));
 }
 
 static char *emit_store_memory(const FOB_Op *op, FOB_Backend *backend) {
@@ -1454,7 +1547,8 @@ static char *fob_emit_op(const FOB_Op *op, FOB_Backend *backend) {
         case FOB_OP_RETURN: return emit_return(op, backend);
         case FOB_OP_LOAD_CONST: return emit_load_const(op, backend);
         case FOB_OP_LOAD_MEMORY: return emit_load_memory(op, backend);
-        case FOB_OP_NEW_LOCAL_VARIABLE: return emit_new_local_variable(op, backend);
+        case FOB_OP_NEW_VARIABLE: return emit_new_variable(op, backend);
+        case FOB_OP_NEW_GLOBAL_VARIABLE: return emit_new_global_variable(op, backend);
         case FOB_OP_STORE_MEMORY: return emit_store_memory(op, backend);
         case FOB_OP_PUSH: return emit_push(op, backend);
         case FOB_OP_POP: return emit_pop(op, backend);
@@ -1513,6 +1607,12 @@ char *fob_emit_ir(const FOB_IR *ir, const char *entrypoint_name) {
         code = realloc(code, strlen(code) + strlen(str) + 1);
         strcat(code, str);
         free(str);
+    }
+
+    if (backend.global_data_length > 0) {
+        code = realloc(code, strlen(code) + backend.global_data_length + 15);
+        strcat(code, "section .data\n");
+        strcat(code, backend.global_data);
     }
 
     delete_backend(&backend);
