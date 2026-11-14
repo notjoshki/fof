@@ -601,7 +601,6 @@ static void push_while(FOB_IR *ir, const FOB_AST *ast) {
         return;
     }
 
-
     push_op(ir, FOB_OP_NEW_LABEL, nop, condition_label);
     FOB_Operand condition = ast_condition_to_operand(ir, ast->value.while_.condition, true);
     push_op(ir, FOB_OP_JMP_FALSE, end_label, condition);
@@ -609,6 +608,47 @@ static void push_while(FOB_IR *ir, const FOB_AST *ast) {
     push_list(ir, &ast->value.while_.body, true);
     push_op(ir, FOB_OP_JMP, condition_label, nop);
     push_op(ir, FOB_OP_NEW_LABEL, nop, end_label);
+}
+
+static void push_compound_arithmetic(FOB_IR *ir, const FOB_AST *ast) {
+    FOB_AST *oper = fob_new_ast_operator(ast->value.compound_arithmetic.type);
+
+    FOB_AST_List new_arithmetic_expr = fob_create_ast_list();
+    fob_push_ast_node(&new_arithmetic_expr, ast->value.compound_arithmetic.lhs);
+    fob_push_ast_node(&new_arithmetic_expr, oper);
+    fob_push_ast_node(&new_arithmetic_expr, ast->value.compound_arithmetic.rhs);
+
+    FOB_Data_Type dt = fob_get_ast_data_type(ast->value.compound_arithmetic.lhs);
+
+    if (dt.primitive_type != FOB_PRIM_F64) {
+        const FOB_Data_Type rhs_dt = fob_get_ast_data_type(ast->value.compound_arithmetic.rhs);
+
+        const bool lhs_dt_is_float = fob_data_type_is_float(&dt);
+        const bool rhs_dt_is_float = fob_data_type_is_float(&rhs_dt);
+        const bool lhs_dt_is_unsigned = fob_data_type_is_unsigned(&dt);
+        const bool rhs_dt_is_unsigned = fob_data_type_is_unsigned(&rhs_dt);
+
+        if (rhs_dt.primitive_type == FOB_PRIM_F64 || (!lhs_dt_is_float && rhs_dt_is_float) ||
+                (lhs_dt_is_unsigned && !rhs_dt_is_unsigned))
+            dt = rhs_dt;
+    }
+
+    FOB_AST *rhs = fob_new_ast_arithmetic(new_arithmetic_expr, dt);
+    push_load(ir, t1(dt), ast_to_fob_operand(ir, rhs));
+
+    fob_delete_ast(oper);
+    fob_delete_ast_list(&new_arithmetic_expr, false);
+    free(rhs);
+
+    if (!ast_is_complex_operand(ast->value.compound_arithmetic.lhs)) {
+        push_op(ir, FOB_OP_STORE_MEMORY, ast_to_fob_operand(ir, ast->value.compound_arithmetic.lhs), t1(dt));
+        return;
+    }
+
+    push_op(ir, FOB_OP_PUSH, nop, t1(dt));
+    push_load(ir, t1(dt), ast_to_fob_operand(ir, ast->value.compound_arithmetic.lhs));
+    push_op(ir, FOB_OP_POP, t2(dt), nop);
+    push_op(ir, FOB_OP_STORE_MEMORY, fob_create_fob_operand_deref(FOB_TEMPORARY_IR_REGISTER_1, dt), t2(dt));
 }
 
 static void push_ast(FOB_IR *ir, const FOB_AST *ast) {
@@ -655,6 +695,9 @@ static void push_ast(FOB_IR *ir, const FOB_AST *ast) {
             break;
         case FOB_AST_WHILE:
             push_while(ir, ast);
+            break;
+        case FOB_AST_COMPOUND_ARITHMETIC:
+            push_compound_arithmetic(ir, ast);
             break;
         default:
             fob_alert("Uncaught AST type %u (%p)\n", ast->type, (void *)ast);

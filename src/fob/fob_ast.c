@@ -121,12 +121,6 @@ FOB_AST *fob_new_ast_condition(FOB_AST_List expression, FOB_Data_Type comparison
     return ast;
 }
 
-void fob_push_condition_part(FOB_AST_List *expression, FOB_AST *lhs, FOB_AST_Operator_Type operator, FOB_AST *rhs) {
-    fob_push_ast_node(expression, lhs);
-    fob_push_ast_node(expression, fob_new_ast_operator(operator));
-    fob_push_ast_node(expression, rhs);
-}
-
 void fob_push_single_valued_condition(FOB_AST_List *expression, FOB_AST *value, const bool checking_if_true) {
     fob_push_ast_node(expression, value);
     fob_push_ast_node(expression, fob_new_ast_operator(checking_if_true ? FOB_AST_OPERATOR_NEQ : FOB_AST_OPERATOR_EQ));
@@ -250,6 +244,15 @@ FOB_AST *fob_new_ast_while(FOB_AST *condition, FOB_AST_List body, bool do_body_f
     return ast;
 }
 
+FOB_AST *fob_new_ast_compound_arithmetic(FOB_AST_Operator_Type type, FOB_AST *lhs, FOB_AST *rhs) {
+    FOB_AST *ast = new_ast();
+    ast->type = FOB_AST_COMPOUND_ARITHMETIC;
+    ast->value.compound_arithmetic.type = type;
+    ast->value.compound_arithmetic.lhs = lhs;
+    ast->value.compound_arithmetic.rhs = rhs;
+    return ast;
+}
+
 void fob_delete_ast(FOB_AST *ast) {
     switch (ast->type) {
         case FOB_AST_OPERATOR:
@@ -348,6 +351,10 @@ void fob_delete_ast(FOB_AST *ast) {
             fob_delete_ast(ast->value.while_.condition);
             fob_delete_ast_list(&ast->value.while_.body, true);
             break;
+        case FOB_AST_COMPOUND_ARITHMETIC:
+            fob_delete_ast(ast->value.compound_arithmetic.lhs);
+            fob_delete_ast(ast->value.compound_arithmetic.rhs);
+            break;
         default:
             fob_alert("Uncaught AST type %u (%p)\n", ast->type, (void *)ast);
             break;
@@ -385,6 +392,7 @@ char *fob_ast_type_to_string(const FOB_AST_Type type) {
         case FOB_AST_BREAK: return "break";
         case FOB_AST_CONTINUE: return "continue";
         case FOB_AST_WHILE: return "while";
+        case FOB_AST_COMPOUND_ARITHMETIC: return "compound arithmetic";
         default: break;
     }
 
@@ -463,6 +471,7 @@ FOB_Data_Type fob_get_ast_data_type(const FOB_AST *ast) {
         }
         case FOB_AST_PRE_OPER: return fob_get_ast_data_type(ast->value.pre_operation.value);
         case FOB_AST_POST_OPER: return fob_get_ast_data_type(ast->value.post_operation.value);
+        case FOB_AST_COMPOUND_ARITHMETIC: return fob_get_ast_data_type(ast->value.compound_arithmetic.rhs);
         default: break;
     }
 

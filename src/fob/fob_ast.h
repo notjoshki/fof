@@ -39,7 +39,8 @@ typedef enum {
     FOB_AST_FOR,
     FOB_AST_BREAK,
     FOB_AST_CONTINUE,
-    FOB_AST_WHILE
+    FOB_AST_WHILE,
+    FOB_AST_COMPOUND_ARITHMETIC
 } FOB_AST_Type;
 
 typedef struct FOB_AST FOB_AST;
@@ -208,6 +209,12 @@ typedef struct {
     bool do_body_first;
 } FOB_AST_While;
 
+typedef struct {
+    FOB_AST_Operator_Type type;
+    FOB_AST *lhs;
+    FOB_AST *rhs;
+} FOB_AST_Compound_Arithmetic;
+
 struct FOB_AST {
     size_t uid;
     FOB_AST_Type type;
@@ -237,6 +244,7 @@ struct FOB_AST {
         FOB_AST_Post_Operation post_operation;
         FOB_AST_For for_;
         FOB_AST_While while_;
+        FOB_AST_Compound_Arithmetic compound_arithmetic;
     } value;
 };
 
@@ -252,7 +260,6 @@ FOB_AST *fob_new_ast_assignment(FOB_AST *lhs, FOB_AST *rhs);
 FOB_AST *fob_new_ast_arithmetic(FOB_AST_List expression, FOB_Data_Type result_type);
 FOB_AST *fob_new_ast_operator(FOB_AST_Operator_Type type);
 FOB_AST *fob_new_ast_condition(FOB_AST_List expression, FOB_Data_Type comparison_type);
-void fob_push_condition_part(FOB_AST_List *expression, FOB_AST *lhs, FOB_AST_Operator_Type operator, FOB_AST *rhs);
 void fob_push_single_valued_condition(FOB_AST_List *expression, FOB_AST *value, const bool checking_if_true);
 FOB_AST *fob_new_ast_if(FOB_AST *condition, FOB_AST_List body, FOB_AST_List else_body);
 FOB_AST *fob_new_ast_parentheses_expression(FOB_AST *inner_value);
@@ -269,6 +276,7 @@ FOB_AST *fob_new_ast_for(FOB_AST *statement, FOB_AST *condition, FOB_AST *repeat
 FOB_AST *fob_new_ast_break();
 FOB_AST *fob_new_ast_continue();
 FOB_AST *fob_new_ast_while(FOB_AST *condition, FOB_AST_List body, bool do_body_first);
+FOB_AST *fob_new_ast_compound_arithmetic(FOB_AST_Operator_Type type, FOB_AST *lhs, FOB_AST *rhs);
 
 void fob_delete_ast(FOB_AST *ast);
 char *fob_ast_type_to_string(const FOB_AST_Type type);
