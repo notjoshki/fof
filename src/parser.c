@@ -115,7 +115,6 @@ static FOB_Primitive_Type vague_data_type_to_primitive_type(const char *identifi
     return FOB_PRIM_UNKNOWN;
 }
 
-/*
 static bool id_is_data_type(const char *identifier) {
     size_t pointers = 0;
     const size_t len = strlen(identifier);
@@ -146,7 +145,6 @@ static bool id_is_data_type(const char *identifier) {
 
     return vague_data_type_to_primitive_type(identifier, typename_len, 0) != FOB_PRIM_UNKNOWN;
 }
-*/
 
 static FOB_Data_Type identifier_to_data_type(const char *identifier, const bool show_error, const size_t modifiers) {
     FOB_Data_Type type = fob_create_data_type(FOB_PRIM_UNKNOWN);
@@ -190,7 +188,8 @@ static FOB_Data_Type identifier_to_data_type(const char *identifier, const bool 
         type.primitive_type = FOB_PRIM_F32;
     else if (typename_len == 6 && strncmp(identifier, "double", typename_len) == 0)
         type.primitive_type = FOB_PRIM_F64;
-    else if (typename_len == 4 && strncmp(identifier, "void", typename_len) == 0) {}
+    else if (typename_len == 4 && strncmp(identifier, "void", typename_len) == 0)
+        type.primitive_type = FOB_PRIM_VOID;
     else {
         type.primitive_type = vague_data_type_to_primitive_type(identifier, typename_len, modifiers);
 
@@ -245,7 +244,7 @@ static FOB_AST *parse_parameter(Parser *parser) {
     eat(parser, TOKEN_ID);
 
     FOB_AST *ast = fob_new_ast_parameter(name, dt, NULL);
-    create_symbol(ast->uid, SYMBOL_VARIABLE, name, dt, parser->scope);
+    create_symbol(ast->uid, SYMBOL_VARIABLE, name, dt, parser->scope, 0);
     return ast;
 }
 
@@ -269,7 +268,7 @@ static FOB_AST *parse_function(Parser *parser, char *type, char *name, const siz
     }
 
     if (symbol == NULL || !symbol->predefined_only)
-        symbol = create_symbol(parser->scope.function_uid, SYMBOL_FUNCTION, name, dt, parser->scope);
+        symbol = create_symbol(parser->scope.function_uid, SYMBOL_FUNCTION, name, dt, parser->scope, 0);
 
     FOB_AST_List params = fob_create_ast_list();
     eat(parser, TOKEN_LPAREN);
@@ -320,6 +319,33 @@ static FOB_AST *parse_function(Parser *parser, char *type, char *name, const siz
 static FOB_AST *parse_declaration(Parser *parser, char *type, char *name, const size_t modifiers) {
     FOB_Data_Type dt = identifier_to_data_type(type, true, modifiers);
     free(type);
+    size_t array_size = 0;
+
+    if (parser->token->type == TOKEN_LSQUARE) {
+        eat(parser, TOKEN_LSQUARE);
+
+        if (parser->token->type != TOKEN_INT) {
+            log_error(ERROR_CRITICAL, "Invalid array size; expected integer but found '%s'\n", token_type_to_string(parser->token->type));
+            array_size = 1;
+        } else {
+            char *endptr;
+            errno = 0;
+            array_size = strtoll(parser->token->value, &endptr, 10);
+
+            if (endptr == parser->token->value || errno == ERANGE || *endptr != '\0') {
+                log_error(ERROR_CRITICAL, "Failed to convert array size to integer\n");
+                array_size = 1;
+            }
+
+            eat(parser, TOKEN_INT);
+        }
+        
+        dt.pointers++;
+        eat(parser, TOKEN_RSQUARE);
+
+        if (parser->token->type == TOKEN_EQUAL)
+            log_error(ERROR_CRITICAL, "Assinging value to array variable '%s'\n", name);
+    }
 
     FOB_AST *value = NULL;
 
@@ -340,13 +366,13 @@ static FOB_AST *parse_declaration(Parser *parser, char *type, char *name, const 
         return fob_new_ast_nop();
     }
 
-    FOB_AST *ast = fob_new_ast_declaration(name, dt, value, parser->scope.function_uid == 0);
-    create_symbol(ast->uid, SYMBOL_VARIABLE, name, dt, parser->scope);
+    FOB_AST *ast = fob_new_ast_declaration(name, dt, value, parser->scope.function_uid == 0, array_size);
+    create_symbol(ast->uid, SYMBOL_VARIABLE, name, dt, parser->scope, array_size);
     return ast;
 }
 
 static FOB_AST *parse_variable(char *name, const Symbol *symbol) {
-    return fob_new_ast_variable(name, symbol->uid, symbol->data_type, symbol->scope.function_uid == 0);
+    return fob_new_ast_variable(name, symbol->uid, symbol->data_type, symbol->scope.function_uid == 0, symbol->array_size);
 }
 
 static FOB_AST *parse_call(Parser *parser) {
@@ -398,6 +424,7 @@ static FOB_AST *parse_identifier(Parser *parser) {
         return parse_call(parser);
 
     size_t modifiers = MOD_NO_MODS;
+    size_t pointers = 0;
 
     while (is_modifier(parser->token->value)) {
         if (strcmp(parser->token->value, "unsigned") == 0) {
@@ -415,9 +442,28 @@ static FOB_AST *parse_identifier(Parser *parser) {
         eat(parser, TOKEN_ID);
     }
 
+    // Unlikely, but we might have an untyped modifier pointer, like "unsigned *"
+    if ((modifiers != 0 || id_is_data_type(parser->token->value)) && parser->token->type == TOKEN_STAR) {
+        // Pointer datatype.
+        while (parser->token->type == TOKEN_STAR) {
+            pointers++;
+            eat(parser, TOKEN_STAR);
+        }
+    }
+
+    // This should be the type, but can be the name if we have an untyped modifier, like "unsigned" on its own.
     char *id = malloc(strlen(parser->token->value) + 1);
     strcpy(id, parser->token->value);
     eat(parser, TOKEN_ID);
+
+    // Check pointers again.
+    if (pointers == 0 && parser->token->type == TOKEN_STAR) {
+        // Pointer datatype.
+        while (parser->token->type == TOKEN_STAR) {
+            pointers++;
+            eat(parser, TOKEN_STAR);
+        }
+    }
 
     if (parser->token->type == TOKEN_ID || modifiers != 0) {
         char *name;
@@ -431,6 +477,13 @@ static FOB_AST *parse_identifier(Parser *parser) {
             name = malloc(strlen(parser->token->value) + 1);
             strcpy(name, parser->token->value);
             eat(parser, TOKEN_ID);
+        }
+
+        if (pointers > 0) {
+            id = realloc(id, strlen(id) + pointers + 1);
+
+            for (size_t i = 0; i < pointers; i++)
+                strcat(id, "*");
         }
 
         if (parser->token->type == TOKEN_LPAREN)
