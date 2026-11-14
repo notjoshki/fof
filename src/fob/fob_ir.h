@@ -116,6 +116,7 @@ typedef struct {
     size_t uid;
     FOB_Data_Type data_type;
     bool is_global;
+    size_t array_size;
 } FOB_Operand_Variable;
 
 typedef struct {
@@ -204,9 +205,9 @@ static inline FOB_Operand fob_create_fob_identifier(char *name) {
         .value.identifier.name = name };
 }
 
-static inline FOB_Operand fob_create_fob_operand_variable(char *name, size_t uid, FOB_Data_Type data_type, bool is_global) {
+static inline FOB_Operand fob_create_fob_operand_variable(char *name, size_t uid, FOB_Data_Type data_type, bool is_global, size_t array_size) {
     return (FOB_Operand){ .type = FOB_OPER_VARIABLE, .data_type = data_type, .value.variable = (FOB_Operand_Variable){
-        .name = name, .uid = uid, .data_type = data_type, .is_global = is_global }};
+        .name = name, .uid = uid, .data_type = data_type, .is_global = is_global, .array_size = array_size }};
 }
 
 static inline FOB_Operand fob_create_fob_operand_label(size_t number) {

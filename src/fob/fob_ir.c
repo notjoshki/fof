@@ -93,7 +93,7 @@ static FOB_Operand ast_string_to_operand(const FOB_AST *ast) {
 }
 
 static FOB_Operand ast_variable_to_operand(const FOB_AST *ast) {
-    return fob_create_fob_operand_variable(ast->value.variable.name, ast->value.variable.uid, ast->value.variable.data_type, ast->value.variable.is_global);
+    return fob_create_fob_operand_variable(ast->value.variable.name, ast->value.variable.uid, ast->value.variable.data_type, ast->value.variable.is_global, ast->value.variable.array_size);
 }
 
 static FOB_Arithmetic_Precedence arithmetic_operator_to_precedence(const FOB_AST_Operator_Type type) {
@@ -350,7 +350,7 @@ static FOB_Operand push_dereference(FOB_IR *ir, const FOB_AST *ast) {
     return fob_create_fob_operand_deref(FOB_TEMPORARY_IR_REGISTER_2, deref_type);
 }
 
-static FOB_Operand ast_index_to_operand(FOB_IR *ir, const FOB_AST *ast) {
+static FOB_Operand ast_index_to_operand(FOB_IR *ir, const FOB_AST *ast, const bool deref) {
     const FOB_Data_Type index_type = fob_get_ast_data_type(ast);
     const FOB_Data_Type ptr_type = fob_get_ast_data_type(ast->value.index.pointer);
 
@@ -365,7 +365,8 @@ static FOB_Operand ast_index_to_operand(FOB_IR *ir, const FOB_AST *ast) {
     push_load(ir, t2(offset_type), t1(offset_type));
     push_load(ir, t1(ptr_type), ast_to_fob_operand(ir, ast->value.index.pointer));
     push_op(ir, FOB_OP_ADD, t1(offset_type), t2(offset_type));
-    return fob_create_fob_operand_deref(FOB_TEMPORARY_IR_REGISTER_1, index_type);
+    return deref ? fob_create_fob_operand_deref(FOB_TEMPORARY_IR_REGISTER_1, index_type) : 
+        fob_create_fob_operand_register(index_type, FOB_TEMPORARY_IR_REGISTER_1);
 }
 
 static FOB_Operand ast_pre_oper_to_operand(FOB_IR *ir, const FOB_AST *ast) {
@@ -436,7 +437,7 @@ static FOB_Operand ast_to_fob_operand(FOB_IR *ir, const FOB_AST *ast) {
             push_call(ir, ast);
             return fob_create_fob_operand_register(ast->value.call.return_type, FOB_RETURN_REGISTER_1);
         case FOB_AST_DEREFERENCE: return push_dereference(ir, ast);
-        case FOB_AST_INDEX: return ast_index_to_operand(ir, ast);
+        case FOB_AST_INDEX: return ast_index_to_operand(ir, ast, true);
         case FOB_AST_PRE_OPER: return ast_pre_oper_to_operand(ir, ast);
         case FOB_AST_POST_OPER: return ast_post_oper_to_operand(ir, ast, true);
         default: break;
@@ -458,7 +459,10 @@ static void push_list(FOB_IR *ir, const FOB_AST_List *list, const bool push_bloc
 }
 
 static void push_load(FOB_IR *ir, FOB_Operand destination, FOB_Operand source) {
-    push_op(ir, fob_operand_is_constant(&source) ? FOB_OP_LOAD_CONST : FOB_OP_LOAD_MEMORY, destination, source);
+    if (source.type == FOB_OPER_VARIABLE && source.value.variable.array_size > 0)
+        push_op(ir, FOB_OP_REF, destination, source);
+    else
+        push_op(ir, fob_operand_is_constant(&source) ? FOB_OP_LOAD_CONST : FOB_OP_LOAD_MEMORY, destination, source);
 }
 
 static void push_function(FOB_IR *ir, const FOB_AST *ast) {
@@ -472,7 +476,7 @@ static void push_function(FOB_IR *ir, const FOB_AST *ast) {
 
     for (size_t i = 0; i < ast->value.function.parameters.count; i++) {
         const FOB_AST *param = ast->value.function.parameters.nodes[i];
-        FOB_Operand var = fob_create_fob_operand_variable(param->value.parameter.name, param->uid, param->value.parameter.data_type, false);
+        FOB_Operand var = fob_create_fob_operand_variable(param->value.parameter.name, param->uid, param->value.parameter.data_type, false, 0);
         push_op(ir, FOB_OP_NEW_VARIABLE, var, nop);
         push_op(ir, FOB_OP_STORE_MEMORY, var, fob_create_fob_operand_argument(i, int_args, float_args, var.data_type));
 
@@ -496,7 +500,8 @@ static void push_return(FOB_IR *ir, const FOB_AST *ast) {
 }
 
 static void push_declaration(FOB_IR *ir, const FOB_AST *ast) {
-    FOB_Operand var = fob_create_fob_operand_variable(ast->value.declaration.name, ast->uid, ast->value.declaration.data_type, ast->value.declaration.is_global);
+    FOB_Operand var = fob_create_fob_operand_variable(ast->value.declaration.name, ast->uid, ast->value.declaration.data_type, 
+        ast->value.declaration.is_global, ast->value.declaration.array_size);
 
     if (ast->value.declaration.is_global) {
         push_op(ir, FOB_OP_NEW_GLOBAL_VARIABLE, var, ast_to_fob_operand(ir, ast->value.declaration.value));
@@ -523,7 +528,10 @@ static void push_assignment(FOB_IR *ir, const FOB_AST *ast) {
     }
 
     push_op(ir, FOB_OP_PUSH, nop, t1(dt));
-    push_load(ir, t1(dt), ast_to_fob_operand(ir, ast->value.assignment.lhs));
+    push_load(ir, t1(dt), ast->value.assignment.lhs->type == FOB_AST_INDEX ? 
+        ast_index_to_operand(ir, ast->value.assignment.lhs, false) : 
+        ast_to_fob_operand(ir, ast->value.assignment.lhs));
+
     push_op(ir, FOB_OP_POP, t2(dt), nop);
     push_op(ir, FOB_OP_STORE_MEMORY, fob_create_fob_operand_deref(FOB_TEMPORARY_IR_REGISTER_1, dt), t2(dt));
 }
