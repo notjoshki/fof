@@ -115,6 +115,7 @@ static FOB_Primitive_Type vague_data_type_to_primitive_type(const char *identifi
     return FOB_PRIM_UNKNOWN;
 }
 
+/*
 static bool id_is_data_type(const char *identifier) {
     size_t pointers = 0;
     const size_t len = strlen(identifier);
@@ -145,6 +146,7 @@ static bool id_is_data_type(const char *identifier) {
 
     return vague_data_type_to_primitive_type(identifier, typename_len, 0) != FOB_PRIM_UNKNOWN;
 }
+*/
 
 static FOB_Data_Type identifier_to_data_type(const char *identifier, const bool show_error, const size_t modifiers) {
     FOB_Data_Type type = fob_create_data_type(FOB_PRIM_UNKNOWN);
@@ -347,38 +349,6 @@ static FOB_AST *parse_variable(char *name, const Symbol *symbol) {
     return fob_new_ast_variable(name, symbol->uid, symbol->data_type, symbol->scope.function_uid == 0);
 }
 
-static char *parse_initial_identifier(Parser *parser, size_t *out_modifiers) {
-    char *id = malloc(strlen(parser->token->value) + 1);
-    strcpy(id, parser->token->value);
-
-    if (parser->flags & PARSING_VALUE) {
-        eat(parser, TOKEN_ID);
-        return id;
-    }
-
-    bool stepped = false;
-
-    if (peek(parser, 1)->type == TOKEN_STAR && peek(parser, 2)->type != TOKEN_EQUAL) {
-    eat(parser, TOKEN_ID);
-
-        while (parser->token->type == TOKEN_STAR) {
-            id = realloc(id, strlen(id) + 2);
-            strcat(id, "*");
-            eat(parser, TOKEN_STAR);
-        }
-
-        stepped = true;
-    } else if (strcmp(id, "signed") == 0)
-        *out_modifiers |= MOD_SIGNED;
-    else if (strcmp(id, "unsigned") == 0)
-        *out_modifiers |= MOD_UNSIGNED;
-
-    if (!stepped)
-        eat(parser, TOKEN_ID);
-
-    return id;
-}
-
 static FOB_AST *parse_call(Parser *parser) {
     char *name = malloc(strlen(parser->token->value) + 1);
     strcpy(name, parser->token->value);
@@ -419,54 +389,54 @@ static FOB_AST *parse_call(Parser *parser) {
     return fob_new_ast_call(name, args, expected_types, type);
 }
 
+static bool is_modifier(const char *identifier) {
+    return strcmp(identifier, "unsigned") == 0 || strcmp(identifier, "signed") == 0;
+}
+
 static FOB_AST *parse_identifier(Parser *parser) {
     if (peek(parser, 1)->type == TOKEN_LPAREN)
         return parse_call(parser);
 
     size_t modifiers = MOD_NO_MODS;
-    char *id = parse_initial_identifier(parser, &modifiers);
 
-    if (!(parser->flags & PARSING_VALUE) && modifiers != MOD_NO_MODS) { // ID was a type modifier, re-parse.
-        size_t modifiers_before;
+    while (is_modifier(parser->token->value)) {
+        if (strcmp(parser->token->value, "unsigned") == 0) {
+            if (modifiers & MOD_SIGNED)
+                log_error(ERROR_CRITICAL, "Invalid combination of signedness modifiers\n");
 
-        do {
-            modifiers_before = modifiers;
-            free(id);
-            id = parse_initial_identifier(parser, &modifiers);
-        } while (modifiers != modifiers_before);
+            modifiers |= MOD_UNSIGNED;
+        } else if (strcmp(parser->token->value, "signed") == 0) {
+            if (modifiers & MOD_UNSIGNED)
+                log_error(ERROR_CRITICAL, "Invalid combination of signedness modifiers\n");
 
-        // TODO: Improve this shit.
-        if ((modifiers & MOD_SIGNED || modifiers & MOD_UNSIGNED) && (strcmp(id, "float") == 0 || strcmp(id, "double") == 0))
-            log_error(ERROR_CRITICAL, "Invalid combination of signedness modifier and floating-point type '%s'\n", id);
+            modifiers |= MOD_SIGNED;
+        } else { assert(false); }
 
-        if (!id_is_data_type(parser->token->value)) {
-            // Only modifiers specified, no type name, default to int.
-            parser->token_index--;
-            parser->token = &parser->tokens[parser->token_index];
-            free(id);
-            id = malloc(4);
-            strcpy(id, "int");
-        }
+        eat(parser, TOKEN_ID);
     }
 
-    if (parser->token->type == TOKEN_ID) {
-        char *name = malloc(strlen(parser->token->value) + 1);
-        strcpy(name, parser->token->value);
-        eat(parser, TOKEN_ID);
+    char *id = malloc(strlen(parser->token->value) + 1);
+    strcpy(id, parser->token->value);
+    eat(parser, TOKEN_ID);
+
+    if (parser->token->type == TOKEN_ID || modifiers != 0) {
+        char *name;
+
+        if (modifiers != 0 && parser->token->type != TOKEN_ID) {
+            // signed/unsigned modifier without typename, default to int.
+            name = id;
+            id = malloc(4);
+            strcpy(id, "int");
+        } else {
+            name = malloc(strlen(parser->token->value) + 1);
+            strcpy(name, parser->token->value);
+            eat(parser, TOKEN_ID);
+        }
 
         if (parser->token->type == TOKEN_LPAREN)
             return parse_function(parser, id, name, modifiers);
 
-        if (modifiers > 0)
-            eat(parser, TOKEN_ID);
-
         return parse_declaration(parser, id, name, modifiers);
-    }
-
-    if (!(parser->flags & PARSING_VALUE) && modifiers != MOD_NO_MODS) {
-        log_error(ERROR_CRITICAL, "Expected symbol name following modifier '%s'\n", id);
-        free(id);
-        return fob_new_ast_nop();
     }
 
     Symbol *symbol = find_symbol(SYMBOL_VARIABLE, id, &parser->scope);
@@ -499,7 +469,7 @@ static FOB_AST *parse_return(Parser *parser) {
     return fob_new_ast_return(symbol->data_type, value);
 }
 
-static FOB_AST *parse_operator(Parser *parser) {
+static FOB_AST_Operator_Type parse_operator(Parser *parser) {
     FOB_AST_Operator_Type type = 0;
 
     switch (parser->token->type) {
@@ -566,7 +536,7 @@ static FOB_AST *parse_operator(Parser *parser) {
     }
 
     step(parser);
-    return fob_new_ast_operator(type);
+    return type;
 }
 
 static bool is_conditional_operator_token(Parser *parser) {
@@ -603,7 +573,7 @@ static FOB_AST *parse_condition(Parser *parser, FOB_AST *first) {
 
     while (is_conditional_operator_token(parser)) {
         if (parser->token->type == TOKEN_BOOL_AND || parser->token->type == TOKEN_BOOL_OR) {
-            fob_push_ast_node(&expr, parse_operator(parser));
+            fob_push_ast_node(&expr, fob_new_ast_operator(parse_operator(parser)));
             FOB_AST *value = parse_value(parser);
 
             if (!is_conditional_operator_token(parser) || parser->token->type == TOKEN_BOOL_AND || parser->token->type == TOKEN_BOOL_OR)
@@ -615,7 +585,7 @@ static FOB_AST *parse_condition(Parser *parser, FOB_AST *first) {
                 break;
         }
 
-        fob_push_ast_node(&expr, parse_operator(parser));
+        fob_push_ast_node(&expr, fob_new_ast_operator(parse_operator(parser)));
 
         FOB_AST *value = parse_value(parser);
 
@@ -857,7 +827,7 @@ static FOB_AST *parse_arithmetic(Parser *parser, FOB_AST *first) {
     fob_push_ast_node(&expr, first);
 
     while (is_arithmetic_operator_token(parser)) {
-        fob_push_ast_node(&expr, parse_operator(parser));
+        fob_push_ast_node(&expr, fob_new_ast_operator(parse_operator(parser)));
 
         FOB_AST *value = parse_value(parser);
 
@@ -976,6 +946,17 @@ static FOB_AST *parse_post_operation(Parser *parser, FOB_AST *value) {
     return fob_new_ast_post_operation(type, value);
 }
 
+static FOB_AST *parse_compound_math(Parser *parser, FOB_AST *lhs) {
+    const FOB_AST_Operator_Type type = parse_operator(parser);
+    eat(parser, TOKEN_EQUAL);
+
+    const size_t flags = parser->flags;
+    parser->flags |= PARSING_VALUE;
+    FOB_AST *ast = fob_new_ast_compound_arithmetic(type, lhs, parse_value(parser));
+    parser->flags = flags;
+    return ast;
+}
+
 static FOB_AST *parse(Parser *parser) {
     if (!(parser->flags & PARSING_VALUE))
         skip_semicolons(parser);
@@ -1045,6 +1026,9 @@ done_value:
 
         if ((parser->token->type == TOKEN_PLUS || parser->token->type == TOKEN_MINUS) && peek(parser, 1)->type == parser->token->type)
             stmt = parse_post_operation(parser, stmt);
+
+        if (is_arithmetic_operator_token(parser) && peek(parser, 1)->type == TOKEN_EQUAL)
+            stmt = parse_compound_math(parser, stmt);
 
         if (parser->token->type == TOKEN_EQUAL)
             stmt = parse_assignment(parser, stmt);
