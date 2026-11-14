@@ -33,6 +33,8 @@
 
 #define REGISTER_ARGUMENT_CAPACITY 6
 
+#define OMIT_VAR_WORDS 0x01
+
 typedef enum {
     FOB_WORD_BYTE,
     FOB_WORD_WORD,
@@ -67,6 +69,7 @@ typedef struct {
     FOB_Data_Type data_type;
     FOB_Backend_Variable_Value value;
     bool is_global;
+    size_t array_size;
 } FOB_Backend_Variable;
 
 typedef struct {
@@ -86,6 +89,7 @@ typedef struct {
     char *global_data;
     size_t global_data_length;
     size_t global_data_capacity;
+    size_t flags;
 } FOB_Backend;
 
 static inline char float_word_char(const FOB_Primitive_Type type) {
@@ -156,7 +160,8 @@ static FOB_Backend create_backend() {
         .cached_stack_bytes_allocated = malloc(STACK_CACHE_CAPACITY * sizeof(size_t)),
         .cached_stack_bytes_used = malloc(STACK_CACHE_CAPACITY * sizeof(size_t)),
         .stack_cache_count = 0, .stack_cache_capacity = STACK_CACHE_CAPACITY,
-        .global_data = malloc(GLOBAL_DATA_CAPACITY + 1), .global_data_length = 0, .global_data_capacity = GLOBAL_DATA_CAPACITY };
+        .global_data = malloc(GLOBAL_DATA_CAPACITY + 1), .global_data_length = 0, .global_data_capacity = GLOBAL_DATA_CAPACITY,
+        .flags = 0 };
 
     backend.function_rodata[0] = backend.global_data[0] = '\0';
     return backend;
@@ -200,14 +205,14 @@ static FOB_Backend_Variable *find_backend_variable(const size_t uid, const FOB_B
     return NULL;
 }
 
-static void add_backend_variable(size_t uid, FOB_Data_Type data_type, FOB_Backend_Variable_Value value, bool is_global, FOB_Backend *backend) {
+static void add_backend_variable(size_t uid, FOB_Data_Type data_type, FOB_Backend_Variable_Value value, bool is_global, size_t array_size, FOB_Backend *backend) {
     if (backend->variable_count + 1 > backend->variable_capacity) {
         backend->variable_capacity *= 2;
         backend->variables = realloc(backend->variables, backend->variable_capacity * sizeof(FOB_Backend_Variable));
     }
 
     backend->variables[backend->variable_count++] = (FOB_Backend_Variable){ 
-        .uid = uid, .data_type = data_type, .value = value, .is_global = is_global };
+        .uid = uid, .data_type = data_type, .value = value, .is_global = is_global, .array_size = array_size };
 }
 
 static char *fob_operand_int_to_string(const FOB_Operand *operand) {
@@ -410,12 +415,22 @@ static char *fob_operand_variable_to_string(const FOB_Operand *operand, FOB_Back
 
     if (var->is_global) {
         str = malloc(strlen(word) + strlen(var->value.global_name) + 5);
-        sprintf(str, "%s [%s_]", word, var->value.global_name);
+
+        if (backend->flags & OMIT_VAR_WORDS)
+            sprintf(str, "[%s_]", var->value.global_name);
+        else
+            sprintf(str, "%s [%s_]", word, var->value.global_name);
+
         return str;
     }
 
     str = malloc(strlen(word) + 32);
-    sprintf(str, "%s [rbp%+d]", word, var->value.stack_offset);
+
+    if (backend->flags & OMIT_VAR_WORDS)
+        sprintf(str, "[rbp%+d]", var->value.stack_offset);
+    else
+        sprintf(str, "%s [rbp%+d]", word, var->value.stack_offset);
+
     return str;
 }
 
@@ -884,16 +899,26 @@ static char *emit_load_memory(const FOB_Op *op, FOB_Backend *backend) {
 
 static char *emit_new_variable(const FOB_Op *op, FOB_Backend *backend) {
     const FOB_Operand_Variable *var = &op->destination.value.variable;
+    FOB_Data_Type dt = var->data_type;
     FOB_Backend_Variable_Value value;
 
     if (!var->is_global) {
-        const size_t size = primitive_type_to_allocation_size(fob_data_type_to_primitive_type(&var->data_type));
+        size_t size;
+        
+        if (var->array_size > 0) {
+            assert(dt.pointers > 0);
+            dt.pointers--;
+        }
+
+        size = primitive_type_to_allocation_size(fob_data_type_to_primitive_type(&dt)) *
+            (var->array_size == 0 ? 1 : var->array_size);
+
         backend->stack_bytes_used += size;
         value.stack_offset = -backend->stack_bytes_used;
     } else
         value.global_name = var->name;
 
-    add_backend_variable(var->uid, var->data_type, value, var->is_global, backend);
+    add_backend_variable(var->uid, var->data_type, value, var->is_global, var->array_size, backend);
 
     if (var->is_global || backend->stack_bytes_used <= backend->stack_bytes_allocated)
         return calloc(1, sizeof(char));
@@ -911,7 +936,7 @@ static char *emit_new_variable(const FOB_Op *op, FOB_Backend *backend) {
 static char *emit_new_global_variable(const FOB_Op *op, FOB_Backend *backend) {
     const FOB_Operand_Variable *var = &op->destination.value.variable;
     assert(var->is_global);
-    add_backend_variable(var->uid, var->data_type, (FOB_Backend_Variable_Value){ .global_name = var->name }, true, backend);
+    add_backend_variable(var->uid, var->data_type, (FOB_Backend_Variable_Value){ .global_name = var->name }, true, var->array_size, backend);
 
     const FOB_Primitive_Type prim_type = fob_data_type_to_primitive_type(&var->data_type);
     char *name = fob_operand_identifier_to_string(var->name);
@@ -1484,7 +1509,10 @@ static char *emit_ref(const FOB_Op *op, FOB_Backend *backend) {
     const FOB_Operand *dst = &op->destination;
     assert(dst->type == FOB_OPER_REGISTER);
 
+    backend->flags |= OMIT_VAR_WORDS;
     char *src_str = fob_operand_to_string(src, backend);
+    backend->flags &= ~OMIT_VAR_WORDS;
+
     char *dst_str = fob_operand_to_string(dst, backend);
 
     char *code = malloc(strlen(src_str) + strlen(dst_str) + 12);
