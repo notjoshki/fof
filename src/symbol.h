@@ -21,10 +21,11 @@ typedef struct {
     Scope scope;
     FOB_AST_List *function_parameters; // Only used for SYMBOL_FUNCTIONs.
     bool predefined_only;
+    size_t array_size;
 } Symbol;
 
 void delete_symbols();
-Symbol *create_symbol(size_t uid, Symbol_Type type, char *name, FOB_Data_Type data_type, Scope scope);
+Symbol *create_symbol(size_t uid, Symbol_Type type, char *name, FOB_Data_Type data_type, Scope scope, size_t array_size);
 Symbol *find_symbol(Symbol_Type type, char *name, const Scope *scope);
 Symbol *find_symbol_by_uid(Symbol_Type type, const size_t uid);
 Symbol *find_function_symbol_by_function_uid(Symbol_Type type, const size_t uid);

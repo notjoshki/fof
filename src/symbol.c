@@ -36,7 +36,7 @@ void delete_symbols() {
     //symbol_capacity = SYMBOL_CAPACITY;
 }
 
-Symbol *create_symbol(size_t uid, Symbol_Type type, char *name, FOB_Data_Type data_type, Scope scope) {
+Symbol *create_symbol(size_t uid, Symbol_Type type, char *name, FOB_Data_Type data_type, Scope scope, size_t array_size) {
     /*
     if (symbols == NULL)
         symbols = malloc(SYMBOL_CAPACITY * sizeof(Symbol));
@@ -54,7 +54,7 @@ Symbol *create_symbol(size_t uid, Symbol_Type type, char *name, FOB_Data_Type da
         return NULL;
     }
 
-    symbols[symbol_count] = (Symbol){ .uid = uid, .type = type, .name = name, .data_type = data_type, .scope = scope, .predefined_only = false };
+    symbols[symbol_count] = (Symbol){ .uid = uid, .type = type, .name = name, .data_type = data_type, .scope = scope, .predefined_only = false, .array_size = array_size };
     return &symbols[symbol_count++];
 }
 
