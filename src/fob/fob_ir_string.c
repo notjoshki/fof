@@ -42,6 +42,12 @@ static char *ir_operand_float_to_string(const FOB_Operand *operand) {
     return str;
 }
 
+static char *ir_operand_string_to_string(const FOB_Operand *operand) {
+    char *str = malloc(strlen(operand->value.string.string) + 3);
+    sprintf(str, "\"%s\"", operand->value.string.string);
+    return str;
+}
+
 static char *ir_operand_register_to_string(const FOB_Operand *operand) {
     char *str = malloc(16);
     sprintf(str, "%%%zu", operand->value.register_.number);
@@ -88,6 +94,9 @@ static char *ir_operand_to_string(const FOB_Operand *operand) {
             break;
         case FOB_OPER_FLOAT:
             str = ir_operand_float_to_string(operand);
+            break;
+        case FOB_OPER_STRING:
+            str = ir_operand_string_to_string(operand);
             break;
         case FOB_OPER_REGISTER:
             str = ir_operand_register_to_string(operand);
